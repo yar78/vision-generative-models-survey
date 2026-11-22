@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
@@ -123,7 +125,8 @@ def get_dataloader(data_cfg: dict, train: bool = True) -> DataLoader:
     ds = get_dataset(data_cfg, train=train)
     if train and len(ds) < data_cfg.get("batch_size", 128):
         raise ValueError(f"Dataset has {len(ds)} images, fewer than batch_size={data_cfg.get('batch_size', 128)}")
-    workers = data_cfg.get("num_workers", 4)
+    # Never more workers than CPUs (Colab has 2; asking for more only triggers a warning).
+    workers = min(data_cfg.get("num_workers", 4), os.cpu_count() or 1)
     return DataLoader(
         ds,
         batch_size=data_cfg.get("batch_size", 128),

@@ -150,7 +150,8 @@ class BaseTrainer:
             print(f"Already trained for {self.step} >= {total} steps; nothing to do.")
             return self.history
 
-        writer = SummaryWriter(str(self.run_dir / "tensorboard"), purge_step=self.step)
+        writer = SummaryWriter(str(self.run_dir / "tensorboard"), purge_step=self.step,
+                               flush_secs=30)  # so a live TensorBoard is at most ~30 s behind
         loader = infinite(get_dataloader(self.data_cfg, train=True))
         running = defaultdict(list)
         for net in self.nets.values():

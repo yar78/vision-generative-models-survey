@@ -1,0 +1,32 @@
+# Compact StyleGAN2 on CIFAR-10 at 32x32. Several hours on one GPU for good samples.
+# For faces: dataset: folder + path: /workspace/genmodels/data/ffhq64, image_size: 64.
+family: stylegan
+name: stylegan2-cifar10
+seed: 0
+data:
+  dataset: cifar10
+  image_size: 32
+  batch_size: 64
+  num_workers: 8
+  hflip: true
+model:
+  z_dim: 256
+  w_dim: 256
+  mapping_layers: 8
+  channels: 256
+  max_channels: 256
+  d_channels: 256
+method:
+  r1_gamma: 0.01          # ~0.01 for CIFAR, larger (0.1-1) for faces at 64+ px
+  r1_every: 16
+  style_mixing_prob: 0.9
+train:
+  steps: 100000
+  lr: 2.5e-3
+  ema_decay: 0.999
+  log_every: 100
+  sample_every: 2000
+  ckpt_every: 5000
+hub:
+  repo_id: null
+  private: true

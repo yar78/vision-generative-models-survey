@@ -1,163 +1,194 @@
 # vision-generative-models-survey
 
 A playground for implementing, training and comparing the main families of
-image (and later video) generative models — from scratch where it teaches
-something, on top of established libraries where it doesn't.
+image generative models -- written from scratch to be read, not just run.
 
-Every model trained or fine-tuned here can be pushed to the Hugging Face Hub
-under my account, with its config, weights, sample grid and metrics, so any
-result can be reloaded with one line.
+Each family comes as two things that share one code path:
 
-> **Status:** planning. This README describes the intended structure; sections
-> marked _(planned)_ do not exist in code yet.
+* a **notebook** that explains the theory, trains the model, visualises what it
+  learnt and pushes it to the Hugging Face Hub, and
+* a **command-line run** (`scripts/train.py`, or `scripts/runpod/train.sh` on a
+  RunPod GPU) using the same config file.
+
+Every trained model can be uploaded to the Hugging Face Hub with its weights,
+config, generated model card, sample grid, metrics and TensorBoard logs, and
+reloaded with `Model.from_pretrained("<user>/<repo>")`.
 
 ---
 
 ## Model families
 
-| Family | What it learns | Planned implementations | First dataset |
-|---|---|---|---|
-| **GAN** | Generator vs. discriminator minimax game | DCGAN, WGAN-GP, conditional GAN | MNIST → CIFAR-10 |
-| **StyleGAN** | Style-modulated generator with a mapping network | StyleGAN2-ADA (fine-tune), small from-scratch StyleGAN2 | FFHQ-64 / AFHQ |
-| **VAE** | Encoder/decoder trained on the ELBO | VAE, β-VAE, VQ-VAE | MNIST → CelebA-64 |
-| **Diffusion** | Reverse a fixed noising process | DDPM, DDIM sampling, classifier-free guidance, latent diffusion (fine-tune SD) | CIFAR-10 → CelebA-64 |
-| **Flow matching** | A velocity field transporting noise to data | Conditional flow matching, rectified flow, latent FM | CIFAR-10 → CelebA-64 |
+| # | Notebook | Family | What's implemented | Configs |
+|---|---|---|---|---|
+| 1 | [`01_vae`](notebooks/01_vae.ipynb) | **VAE** | conv VAE, beta-VAE, KL warm-up; reconstructions, interpolations, latent traversals | `vae/mnist`, `ray_dog/vae` |
+| 2 | [`02_gan`](notebooks/02_gan.ipynb) | **GAN** | DCGAN (non-saturating), WGAN-GP, conditional GAN, DiffAugment | `gan/dcgan_mnist`, `gan/wgangp_cifar10`, `ray_dog/dcgan` |
+| 3 | [`03_stylegan`](notebooks/03_stylegan.ipynb) | **StyleGAN2** | mapping network, modulated/demodulated convs, noise inputs, style mixing, truncation, R1, minibatch-std, EMA, DiffAugment | `stylegan/mnist`, `stylegan/cifar10`, `ray_dog/stylegan` |
+| 4 | [`04_diffusion`](notebooks/04_diffusion.ipynb) | **Diffusion** | DDPM, DDIM sampling, linear/cosine schedules, classifier-free guidance | `diffusion/ddpm_mnist`, `diffusion/ddpm_cifar10`, `ray_dog/ddpm` |
+| 5 | [`05_flow_matching`](notebooks/05_flow_matching.ipynb) | **Flow matching** | conditional flow matching / rectified flow, Euler & Heun solvers, logit-normal t, CFG, a 2-D toy | `flow_matching/mnist`, `flow_matching/cifar10`, `ray_dog/flow_matching` |
 
-Starting on small datasets (MNIST, CIFAR-10, 64×64 faces) keeps a full training
-run in the range of minutes to a few hours on a single GPU, so the families
-can be compared on the same data before anything is scaled up.
+Diffusion and flow matching share one U-Net (`genmodels/common/unet.py`), and their
+MNIST / CIFAR-10 / Ray_dog configs are matched (same network, batch and steps), so
+they can be compared directly.
 
-## Planned layout _(planned)_
+## Datasets
+
+| `data.dataset` | |
+|---|---|
+| `mnist`, `fashion_mnist`, `cifar10` | torchvision, downloaded automatically |
+| `hf` | any Hugging Face Hub image dataset: `hf_repo: <user>/<dataset>` |
+| `folder` | an ImageFolder-style directory: `path: /some/dir` |
+
+### Ray_dog
+
+[`yaryar78/Ray_dog`](https://huggingface.co/datasets/yaryar78/Ray_dog): 258 photos
+of one dog, mixed resolutions (mostly ~2000 px), every pose and background. The
+`configs/ray_dog/` experiments train every family on it at 64x64:
+
+* photos are decoded and downscaled **once** into memory, then randomly cropped
+  and flipped each step (`random_crop`, `crop_scale`, `hflip`);
+* both GANs use **DiffAugment** -- without it a discriminator memorises 258
+  images within a few thousand steps;
+* every notebook ends with a **memorisation check** (samples next to their
+  nearest training photo), because with this little data diffusion and flow
+  models will start copying. The strongest results on a dataset this size come
+  from fine-tuning a pretrained model (see the roadmap).
+
+## Layout
 
 ```
 genmodels/
-  common/          data loaders, EMA, logging, checkpointing, seeding
-  hub/             Hugging Face Hub upload/download + model-card rendering
-  gan/             DCGAN, WGAN-GP, cGAN
-  stylegan/        StyleGAN2 (+ ADA)
-  vae/             VAE, beta-VAE, VQ-VAE
-  diffusion/       DDPM/DDIM, CFG, latent diffusion
-  flow_matching/   CFM, rectified flow
-configs/           one YAML per experiment  (e.g. configs/diffusion/ddpm_cifar10.yaml)
+  common/
+    config.py        YAML configs + key.path=value overrides, output/data roots
+    data.py          datasets (torchvision, HF Hub, folders), all scaled to [-1, 1]
+    trainer.py       shared loop: TensorBoard, sample grids, checkpoints/resume, export
+    unet.py          U-Net for diffusion and flow matching
+    diffaugment.py   differentiable augmentation for data-efficient GANs
+    utils.py         EMA, seeding, image grids, plots, nearest-neighbour check
+  vae.py  gan.py  stylegan.py  diffusion.py  flow_matching.py
+  hub.py             push a run to the Hub + generate its model card
+configs/<family>/*.yaml, configs/ray_dog/*.yaml
+notebooks/01_vae ... 05_flow_matching
 scripts/
-  train.py         python scripts/train.py --config <yaml> [--push-to-hub]
-  sample.py        generate a grid / batch from a local or Hub checkpoint
-  evaluate.py      FID / IS / precision-recall against a reference set
-notebooks/         exploration and visual comparisons
-tests/             shape and one-step smoke tests per model
+  train.py           python scripts/train.py --config <yaml> [--push-to-hub] [overrides]
+  push_to_hub.py     push an already-finished run directory
+  runpod/setup.sh    one-time setup on a fresh pod
+  runpod/train.sh    detached training + TensorBoard on a pod
+tests/test_smoke.py  every config: train -> checkpoint -> export -> reload -> resume
 ```
 
-Each family follows the same contract — a `nn.Module` plus a config — so
-`train.py`, `sample.py` and `evaluate.py` work unchanged across all of them.
+Every family implements the same small interface (`build`, `training_step`,
+`sample`, `export_model`) on top of `BaseTrainer`, and every exported model has
+`.generate(n)` and `.from_pretrained(...)`.
 
-## Hugging Face integration
-
-### One-time setup
-
-1. Create a **write** token at <https://huggingface.co/settings/tokens>.
-2. Make it available without committing it, either:
-   ```bash
-   huggingface-cli login            # stores the token in ~/.cache/huggingface
-   ```
-   or put `HF_TOKEN=hf_...` in a local `.env` (git-ignored).
-3. Set the account/org the models go to:
-   ```bash
-   export HF_USERNAME=<your-hf-username>
-   ```
-
-The token never goes into git, configs, or model cards.
-
-### What gets uploaded _(planned)_
-
-Each training run can end with `--push-to-hub`, which creates (or updates) a
-model repo named
-
-```
-<HF_USERNAME>/<family>-<model>-<dataset>[-<tag>]
-e.g.  <HF_USERNAME>/diffusion-ddpm-cifar10
-      <HF_USERNAME>/flowmatching-rectified-celeba64-v2
-```
-
-containing:
-
-| File | Purpose |
-|---|---|
-| `model.safetensors` | weights (EMA weights where the model uses EMA) |
-| `config.yaml` | the exact experiment config used to train it |
-| `README.md` | generated model card: family, dataset, steps, hardware, metrics, git commit |
-| `samples.png` | fixed-seed sample grid at the final checkpoint |
-| `metrics.json` | FID and other evaluation numbers, with the reference set they were computed against |
-
-Models are built on `huggingface_hub.PyTorchModelHubMixin`, so anything pushed
-can be reloaded directly:
-
-```python
-from genmodels.diffusion import DDPM
-model = DDPM.from_pretrained("<HF_USERNAME>/diffusion-ddpm-cifar10")
-```
-
-Fine-tunes of existing pipelines (e.g. Stable Diffusion LoRAs) use the
-`diffusers` `push_to_hub` path instead, so they load with the standard
-`diffusers` API. Repos are created **private** by default; making one public is
-a deliberate step.
-
-## Getting started _(planned)_
+## Quick start (local or notebook)
 
 ```bash
 git clone https://github.com/yar78/vision-generative-models-survey.git
 cd vision-generative-models-survey
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[notebook,dev]"
+jupyter lab notebooks/
 ```
 
-Core dependencies: PyTorch, torchvision, `huggingface_hub`, `diffusers`,
-`accelerate`, `safetensors`, `torch-fidelity` (FID), and an experiment logger
-(TensorBoard or Weights & Biases).
+Command line:
 
 ```bash
-python scripts/train.py --config configs/gan/dcgan_mnist.yaml
-python scripts/train.py --config configs/diffusion/ddpm_cifar10.yaml --push-to-hub
-python scripts/sample.py --from-hub <HF_USERNAME>/diffusion-ddpm-cifar10 --n 64
+python scripts/train.py --config configs/vae/mnist.yaml
+python scripts/train.py --config configs/ray_dog/ddpm.yaml --push-to-hub
+python scripts/train.py --config configs/gan/dcgan_mnist.yaml train.steps=2000 data.batch_size=64
 ```
 
-## Evaluation
+Runs go to `outputs/<name>/` (`$GENMODELS_OUTPUT` overrides). Re-running a
+command resumes from that run's checkpoint. TensorBoard:
 
-So that the families can be compared fairly:
+```bash
+tensorboard --logdir outputs
+```
 
-- **Same data, same resolution** for every model in a comparison.
-- **FID** (50k samples where affordable, otherwise stated) against the
-  training-set statistics, computed with one fixed tool (`torch-fidelity`).
-- **Fixed-seed sample grids** saved for every checkpoint that gets reported.
-- **Cost is part of the result:** training GPU-hours and sampling time per
-  image are recorded next to quality, since that is where the families differ
-  most (one-step GANs vs. many-step diffusion vs. few-step flow matching).
+## Training on RunPod
+
+Use a pod with a **network volume** mounted at `/workspace`; the repo, datasets,
+outputs and the Hugging Face login all live there and survive the pod.
+
+```bash
+cd /workspace && git clone https://github.com/yar78/vision-generative-models-survey.git
+cd vision-generative-models-survey
+bash scripts/runpod/setup.sh          # every new pod: installs deps, checks GPU + HF login
+bash scripts/runpod/train.sh configs/ray_dog/ddpm.yaml --push-to-hub
+tail -f /workspace/genmodels/outputs/diffusion-ddpm-ray-dog-64/train.log
+```
+
+`train.sh` runs detached (closing the terminal does not stop it), writes to
+`/workspace/genmodels/outputs/<name>/`, and serves TensorBoard on port 6006 --
+expose HTTP port 6006 on the pod and open `https://<pod-id>-6006.proxy.runpod.net`.
+
+**Cost:** an idle pod bills. For unattended runs,
+
+```bash
+TERMINATE_WHEN_DONE=1 bash scripts/runpod/train.sh configs/ray_dog/stylegan.yaml --push-to-hub
+```
+
+terminates the pod when training ends (outputs are already on the volume and,
+with `--push-to-hub`, on the Hub). Rough budgets on one modern GPU: MNIST configs
+5-30 min, Ray_dog configs 1-3 h, CIFAR-10 diffusion/flow configs ~10 h.
+
+## Hugging Face Hub
+
+**Login once** with a *write* token from <https://huggingface.co/settings/tokens>:
+`hf auth login` (or `huggingface-cli login`), `notebook_login()` in a notebook,
+or the `HF_TOKEN` environment variable. The token is never written into the repo,
+configs or model cards.
+
+**Where it goes:** `<user>/<config name>`, e.g. `yaryar78/diffusion-ddpm-ray-dog-64`,
+where `<user>` is `hub.username`, `$HF_USERNAME` or the logged-in account.
+Override with `hub.repo_id` or `--repo-id`. Repos are **private** unless
+`hub.private: false` or `--public`.
+
+**What's uploaded:**
+
+| File | |
+|---|---|
+| `model.safetensors`, `config.json` | weights (EMA weights where the family uses EMA) + constructor args |
+| `README.md` | generated model card: dataset, resolution, steps, params, GPU, training time, git commit, metrics, usage |
+| `samples.png` | fixed-seed sample grid at the final step |
+| `metrics.json`, `run_info.json`, `train_config.yaml` | final losses, run metadata, the exact config |
+| `runs/` | TensorBoard logs (the Hub's *Training metrics* tab) |
+
+**Reload anywhere:**
+
+```python
+from genmodels.diffusion import DiffusionModel
+model = DiffusionModel.from_pretrained("yaryar78/diffusion-ddpm-ray-dog-64")
+images = model.generate(16, steps=50)   # (16, 3, 64, 64) in [-1, 1]
+```
+
+A finished run can also be pushed later: `python scripts/push_to_hub.py outputs/<name>`.
+
+## Tests
+
+```bash
+pytest -q
+```
+
+Trains every config for two steps on fake data on CPU, then checks the export,
+the `from_pretrained` round trip, the model card and checkpoint resume.
 
 ## Roadmap
 
-1. Repo scaffolding: package layout, config system, shared training loop, Hub module.
-2. VAE on MNIST — simplest end-to-end path, used to validate the Hub upload/reload loop.
-3. DCGAN → WGAN-GP on CIFAR-10.
-4. DDPM (+ DDIM sampling) on CIFAR-10.
-5. Conditional flow matching / rectified flow on CIFAR-10; compare against DDPM at equal compute.
-6. StyleGAN2-ADA on a 64×64 faces dataset.
-7. Latent variants: VQ-VAE as a tokenizer, latent diffusion, latent flow matching.
-8. Fine-tuning pretrained models (Stable Diffusion / SDXL LoRA, FLUX-style flow models).
-9. Extension to video generation.
-
-## Repository rules
-
-- **No data or weights in git.** Datasets, checkpoints and sample dumps are
-  git-ignored; weights live on the Hugging Face Hub.
-- **No secrets in git.** `HF_TOKEN`, `WANDB_API_KEY` etc. stay in the
-  environment or a local `.env`.
-- **Every reported number is reproducible:** its config, git commit and Hub repo
-  are recorded together.
+1. ~~Package, configs, shared trainer, Hub upload~~
+2. ~~VAE, DCGAN/WGAN-GP, StyleGAN2, DDPM/DDIM, flow matching -- notebooks + scripts~~
+3. ~~Hugging Face datasets (Ray_dog) with DiffAugment and memorisation checks~~
+4. FID / precision-recall evaluation (`torch-fidelity`) recorded in `metrics.json`
+5. Latent models: VQ-VAE / KL autoencoder as a tokenizer, latent diffusion and latent flow matching
+6. Fine-tuning pretrained models on Ray_dog: DreamBooth / LoRA on Stable Diffusion and a flow model (SD3 / FLUX)
+7. Reflow and distillation toward few-step generation
+8. Video generation
 
 ## References
 
-- Goodfellow et al., *Generative Adversarial Networks*, 2014
-- Radford et al., *DCGAN*, 2015 · Gulrajani et al., *WGAN-GP*, 2017
-- Karras et al., *StyleGAN2*, 2020 · *StyleGAN2-ADA*, 2020
-- Kingma & Welling, *Auto-Encoding Variational Bayes*, 2013 · van den Oord et al., *VQ-VAE*, 2017
-- Ho et al., *DDPM*, 2020 · Song et al., *DDIM*, 2020 · Rombach et al., *Latent Diffusion*, 2022
-- Lipman et al., *Flow Matching for Generative Modeling*, 2022 · Liu et al., *Rectified Flow*, 2022
+- Kingma & Welling, *Auto-Encoding Variational Bayes*, 2013 · Higgins et al., *beta-VAE*, 2017
+- Goodfellow et al., *Generative Adversarial Networks*, 2014 · Radford et al., *DCGAN*, 2015 · Gulrajani et al., *WGAN-GP*, 2017
+- Zhao et al., *Differentiable Augmentation for Data-Efficient GAN Training*, 2020
+- Karras et al., *StyleGAN*, 2019 · *StyleGAN2*, 2020 · *StyleGAN2-ADA*, 2020
+- Ho et al., *DDPM*, 2020 · Song et al., *DDIM*, 2020 · Nichol & Dhariwal, *Improved DDPM*, 2021 · Ho & Salimans, *Classifier-Free Guidance*, 2022
+- Lipman et al., *Flow Matching for Generative Modeling*, 2022 · Liu et al., *Rectified Flow*, 2022 · Esser et al., *Scaling Rectified Flow Transformers (SD3)*, 2024

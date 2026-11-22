@@ -1,0 +1,32 @@
+# Unconditional DDPM on CIFAR-10 (the Ho et al. setup, slightly smaller). ~10 h on a 4090 for 200k steps.
+family: diffusion
+name: diffusion-ddpm-cifar10
+seed: 0
+data:
+  dataset: cifar10
+  image_size: 32
+  batch_size: 128
+  num_workers: 8
+  hflip: true
+model:
+  base_channels: 128
+  channel_mults: [1, 2, 2, 2]
+  num_res_blocks: 2
+  attn_resolutions: [16]
+  dropout: 0.1
+method:
+  timesteps: 1000
+  schedule: linear
+  conditional: false
+  sample_steps: 100
+train:
+  steps: 200000
+  lr: 2.0e-4
+  warmup_steps: 5000
+  ema_decay: 0.9999
+  log_every: 100
+  sample_every: 5000
+  ckpt_every: 5000
+hub:
+  repo_id: null
+  private: true

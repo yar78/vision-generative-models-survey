@@ -1,0 +1,35 @@
+# Class-conditional rectified flow on MNIST. Same U-Net and budget as configs/diffusion/ddpm_mnist.yaml,
+# so the two are directly comparable.
+family: flow_matching
+name: flowmatching-rf-mnist
+seed: 0
+data:
+  dataset: mnist
+  image_size: 32
+  batch_size: 128
+  num_workers: 4
+model:
+  base_channels: 32
+  channel_mults: [1, 2, 2]
+  num_res_blocks: 2
+  attn_resolutions: [8]
+  dropout: 0.1
+method:
+  sigma_min: 0.0          # 0 = rectified flow
+  time_sampling: uniform  # uniform | logit_normal
+  conditional: true
+  p_uncond: 0.1
+  guidance_scale: 2.0
+  sample_steps: 20
+  solver: euler           # euler | heun
+train:
+  steps: 20000
+  lr: 2.0e-4
+  warmup_steps: 500
+  ema_decay: 0.999
+  log_every: 100
+  sample_every: 2000
+  ckpt_every: 5000
+hub:
+  repo_id: null
+  private: true

@@ -1,0 +1,28 @@
+# WGAN-GP on CIFAR-10. Each step runs 5 critic updates; ~1-2 h on one GPU.
+family: gan
+name: gan-wgangp-cifar10
+seed: 0
+data:
+  dataset: cifar10
+  image_size: 32
+  batch_size: 64
+  num_workers: 8
+  hflip: true
+model:
+  z_dim: 128
+  g_channels: 128
+  d_channels: 128
+method:
+  loss: wgan-gp
+  n_critic: 5
+  gp_weight: 10.0
+  conditional: false
+train:
+  steps: 50000
+  lr: 1.0e-4
+  log_every: 100
+  sample_every: 2000
+  ckpt_every: 5000
+hub:
+  repo_id: null
+  private: true

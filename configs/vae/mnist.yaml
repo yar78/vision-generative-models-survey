@@ -1,0 +1,25 @@
+# VAE on MNIST. ~5 min on one GPU.
+family: vae
+name: vae-mnist
+seed: 0
+data:
+  dataset: mnist
+  image_size: 32          # MNIST is 28x28; resized to 32 so every family shares one resolution
+  batch_size: 128
+  num_workers: 4
+model:
+  latent_dim: 32
+  base_channels: 32
+  channel_mults: [1, 2, 4]
+method:
+  beta: 1.0               # >1 for beta-VAE
+  kl_warmup_steps: 2000
+train:
+  steps: 20000
+  lr: 1.0e-3
+  log_every: 100
+  sample_every: 1000
+  ckpt_every: 5000
+hub:
+  repo_id: null           # default: <HF_USERNAME>/<name>
+  private: true

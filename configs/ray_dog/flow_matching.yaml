@@ -1,0 +1,37 @@
+# Rectified flow on Ray_dog at 64x64. Same U-Net and budget as ray_dog/ddpm.yaml.
+family: flow_matching
+name: flowmatching-rf-ray-dog-64
+seed: 0
+data:
+  dataset: hf
+  hf_repo: yaryar78/Ray_dog   # 258 photos of one dog, mixed sizes; decoded and cached in memory once
+  image_size: 64
+  cache_size: 96             # short side after the one-off downscale; random 64px crops come from this
+  random_crop: true
+  crop_scale: [0.5, 1.0]
+  hflip: true
+  batch_size: 32
+  num_workers: 4
+model:
+  base_channels: 64
+  channel_mults: [1, 2, 2, 4]
+  num_res_blocks: 2
+  attn_resolutions: [16]
+  dropout: 0.2
+method:
+  sigma_min: 0.0
+  time_sampling: logit_normal
+  conditional: false
+  sample_steps: 50
+  solver: heun
+train:
+  steps: 40000
+  lr: 1.0e-4
+  warmup_steps: 1000
+  ema_decay: 0.999
+  log_every: 50
+  sample_every: 2000
+  ckpt_every: 2000
+hub:
+  repo_id: null
+  private: true

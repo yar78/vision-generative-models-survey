@@ -1,0 +1,25 @@
+# DCGAN (non-saturating BCE loss) on MNIST. ~10 min on one GPU.
+family: gan
+name: gan-dcgan-mnist
+seed: 0
+data:
+  dataset: mnist
+  image_size: 32
+  batch_size: 128
+  num_workers: 4
+model:
+  z_dim: 100
+  g_channels: 64
+  d_channels: 64
+method:
+  loss: bce               # bce | wgan-gp
+  conditional: false      # true -> class-conditional cGAN
+train:
+  steps: 20000
+  lr: 2.0e-4
+  log_every: 100
+  sample_every: 1000
+  ckpt_every: 5000
+hub:
+  repo_id: null
+  private: true

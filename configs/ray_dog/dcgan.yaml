@@ -1,0 +1,31 @@
+# DCGAN + DiffAugment on Ray_dog at 64x64. Without DiffAugment the discriminator
+# memorises 258 images within a few thousand steps and training collapses.
+family: gan
+name: gan-dcgan-ray-dog-64
+seed: 0
+data:
+  dataset: hf
+  hf_repo: yaryar78/Ray_dog   # 258 photos of one dog, mixed sizes; decoded and cached in memory once
+  image_size: 64
+  cache_size: 96             # short side after the one-off downscale; random 64px crops come from this
+  random_crop: true
+  crop_scale: [0.5, 1.0]
+  hflip: true
+  batch_size: 32
+  num_workers: 4
+model:
+  z_dim: 128
+  g_channels: 64
+  d_channels: 64
+method:
+  loss: bce
+  diffaugment: color,translation,cutout
+train:
+  steps: 30000
+  lr: 2.0e-4
+  log_every: 50
+  sample_every: 1000
+  ckpt_every: 2000
+hub:
+  repo_id: null
+  private: true

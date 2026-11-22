@@ -43,8 +43,8 @@ train:
   steps: 2000
   lr: 1.0e-4
   warmup_steps: 100
-  mixed_precision: bf16
-  gradient_checkpointing: false   # true: less VRAM, ~25% slower
+  mixed_precision: bf16          # falls back to fp16 on GPUs without bf16 (T4)
+  gradient_checkpointing: auto    # auto = on for GPUs under 20 GB (Colab T4); true/false to force
   grad_clip: 1.0
   log_every: 25
   sample_every: 250

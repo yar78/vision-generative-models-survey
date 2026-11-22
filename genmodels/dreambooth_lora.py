@@ -85,6 +85,9 @@ class Trainer(BaseTrainer):
         base = m.get("pretrained", "stable-diffusion-v1-5/stable-diffusion-v1-5")
         kw = {"revision": m.get("revision")}
         precision = t.get("mixed_precision", "bf16") if self.device.type == "cuda" else "no"
+        if precision == "bf16" and not torch.cuda.is_bf16_supported():
+            print("This GPU has no bf16 support (e.g. a Colab T4): using fp16 with gradient scaling.")
+            precision = "fp16"
         self.weight_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "no": torch.float32}[precision]
         variant = m.get("variant") if self.weight_dtype != torch.float32 else None
 
@@ -111,8 +114,17 @@ class Trainer(BaseTrainer):
         for p in self.unet.parameters():
             if p.requires_grad:
                 p.data = p.data.float()
-        if t.get("gradient_checkpointing", False):
+        # Gradient checkpointing recomputes activations in the backward pass: ~40% less
+        # memory, ~25% slower. "auto" turns it on for GPUs under 20 GB (e.g. a 16 GB T4).
+        gc = t.get("gradient_checkpointing", "auto")
+        if gc == "auto":
+            gc = self.device.type == "cuda" and torch.cuda.get_device_properties(self.device).total_memory < 20 * 2**30
+            if gc:
+                print("GPU has < 20 GB: enabling gradient checkpointing.")
+        if gc:
             self.unet.enable_gradient_checkpointing()
+        # fp16 gradients underflow without loss scaling; bf16 and fp32 do not need it.
+        self.scaler = torch.amp.GradScaler(self.device.type, enabled=self.weight_dtype == torch.float16)
 
         self.lora_params = [p for p in self.unet.parameters() if p.requires_grad]
         self.nets["unet"] = self.unet
@@ -214,9 +226,11 @@ class Trainer(BaseTrainer):
             logs["loss_prior"] = prior.item()
         opt = self.opts["lora"]
         opt.zero_grad(set_to_none=True)
-        loss.backward()
+        self.scaler.scale(loss).backward()
+        self.scaler.unscale_(opt)
         torch.nn.utils.clip_grad_norm_(self.lora_params, self.grad_clip)
-        opt.step()
+        self.scaler.step(opt)
+        self.scaler.update()
         logs["loss"] = loss.item()
         return logs
 

@@ -1,0 +1,27 @@
+# Secrets — HF_TOKEN, WANDB_API_KEY live here, never in git
+.env
+.env.*
+
+# Data, weights, outputs (weights go to the Hugging Face Hub)
+data/
+checkpoints/
+outputs/
+samples/
+runs/
+wandb/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store

@@ -1,0 +1,32 @@
+# VAE on Ray's aligned face crops (yaryar78/Ray_dog_faces, 124 images) at 64x64.
+# Same network as configs/ray_dog/vae.yaml: with every face centred and level, the
+# VAE no longer has to spend capacity on framing, so samples and reconstructions
+# should be noticeably sharper -- and latent traversals more about the face itself.
+family: vae
+name: vae-ray-dog-faces-64
+seed: 0
+data:
+  dataset: hf
+  hf_repo: yaryar78/Ray_dog_faces   # private: log in to Hugging Face first
+  image_size: 64
+  cache_size: 64            # crops are already square and centred: just resize
+  random_crop: false        # cropping would undo the alignment
+  hflip: true
+  batch_size: 32            # 124 images -> ~4 steps per epoch
+  num_workers: 4
+model:
+  latent_dim: 128
+  base_channels: 32
+  channel_mults: [1, 2, 4, 8]
+method:
+  beta: 1.0                 # >1 for beta-VAE: try 4 and compare the traversals in notebook 01
+  kl_warmup_steps: 2000
+train:
+  steps: 20000              # ~5000 epochs of 124 images
+  lr: 5.0e-4
+  log_every: 50
+  sample_every: 1000
+  ckpt_every: 2000
+hub:
+  repo_id: null             # default: <HF_USERNAME>/vae-ray-dog-faces-64
+  private: true

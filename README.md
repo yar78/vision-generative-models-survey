@@ -79,7 +79,7 @@ python scripts/data/make_face_dataset.py push --out data/ray_dog_faces --repo-id
 * Every crop's provenance (source row, scores, roll angle, padding) is a dataset
   column; `build_info.json` records the detector, thresholds, source revision and code commit.
 
-Configs in `configs/ray_dog_faces/` (StyleGAN2, DDPM) train on it at 64x64 with no
+Configs in `configs/ray_dog_faces/` (VAE, StyleGAN2, DDPM) train on it at 64x64 with no
 random crops, which would undo the alignment.
 
 The strongest results on a dataset this size come from fine-tuning a pretrained

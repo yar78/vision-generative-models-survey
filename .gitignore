@@ -3,11 +3,14 @@
 .env.*
 
 # Data, weights, outputs (weights go to the Hugging Face Hub)
+# (anywhere: running a notebook from notebooks/ creates notebooks/data and notebooks/outputs)
 data/
-checkpoints/
 outputs/
-samples/
+checkpoints/
 runs/
+/samples/
+# ...but scripts/data/ holds code
+!/scripts/data/
 wandb/
 *.pt
 *.pth

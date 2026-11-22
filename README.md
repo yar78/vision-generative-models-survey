@@ -25,10 +25,16 @@ reloaded with `Model.from_pretrained("<user>/<repo>")`.
 | 3 | [`03_stylegan`](notebooks/03_stylegan.ipynb) | **StyleGAN2** | mapping network, modulated/demodulated convs, noise inputs, style mixing, truncation, R1, minibatch-std, EMA, DiffAugment | `stylegan/mnist`, `stylegan/cifar10`, `ray_dog/stylegan` |
 | 4 | [`04_diffusion`](notebooks/04_diffusion.ipynb) | **Diffusion** | DDPM, DDIM sampling, linear/cosine schedules, classifier-free guidance | `diffusion/ddpm_mnist`, `diffusion/ddpm_cifar10`, `ray_dog/ddpm` |
 | 5 | [`05_flow_matching`](notebooks/05_flow_matching.ipynb) | **Flow matching** | conditional flow matching / rectified flow, Euler & Heun solvers, logit-normal t, CFG, a 2-D toy | `flow_matching/mnist`, `flow_matching/cifar10`, `ray_dog/flow_matching` |
+| 6 | [`06_dreambooth_lora`](notebooks/06_dreambooth_lora.ipynb) | **Fine-tuning: DreamBooth LoRA** | LoRA on Stable Diffusion 1.5's U-Net attention, rare-token identifier, prior preservation, LoRA strength dial, drift & memorisation checks | `ray_dog/dreambooth_lora` |
 
 Diffusion and flow matching share one U-Net (`genmodels/common/unet.py`), and their
 MNIST / CIFAR-10 / Ray_dog configs are matched (same network, batch and steps), so
 they can be compared directly.
+
+Notebooks 1-5 train **from scratch**. Notebook 6 **fine-tunes a pretrained
+text-to-image model** instead -- the practical way to get high-quality images of
+one subject from a few hundred photos. It needs the fine-tuning extras
+(`pip install -e ".[finetune]"`: diffusers, transformers, peft) and a GPU.
 
 ## Datasets
 
@@ -50,8 +56,13 @@ of one dog, mixed resolutions (mostly ~2000 px), every pose and background. The
   images within a few thousand steps;
 * every notebook ends with a **memorisation check** (samples next to their
   nearest training photo), because with this little data diffusion and flow
-  models will start copying. The strongest results on a dataset this size come
-  from fine-tuning a pretrained model (see the roadmap).
+  models will start copying.
+
+The strongest results on a dataset this size come from fine-tuning a pretrained
+model: `configs/ray_dog/dreambooth_lora.yaml` / notebook 06 teaches Stable
+Diffusion 1.5 the identifier `sks dog` with a ~12 MB LoRA, so prompts like
+`a photo of sks dog on the beach at sunset` render Ray at 512x512 in new scenes
+(~30-45 min for 2000 steps on a 24 GB GPU).
 
 ## Layout
 
@@ -65,15 +76,18 @@ genmodels/
     diffaugment.py   differentiable augmentation for data-efficient GANs
     utils.py         EMA, seeding, image grids, plots, nearest-neighbour check
   vae.py  gan.py  stylegan.py  diffusion.py  flow_matching.py
+  dreambooth_lora.py LoRA fine-tuning of Stable Diffusion (diffusers + peft)
   hub.py             push a run to the Hub + generate its model card
 configs/<family>/*.yaml, configs/ray_dog/*.yaml
-notebooks/01_vae ... 05_flow_matching
+notebooks/01_vae ... 06_dreambooth_lora
 scripts/
   train.py           python scripts/train.py --config <yaml> [--push-to-hub] [overrides]
   push_to_hub.py     push an already-finished run directory
   runpod/setup.sh    one-time setup on a fresh pod
   runpod/train.sh    detached training + TensorBoard on a pod
-tests/test_smoke.py  every config: train -> checkpoint -> export -> reload -> resume
+tests/
+  test_smoke.py           every from-scratch config: train -> checkpoint -> export -> reload -> resume
+  test_dreambooth_lora.py DreamBooth LoRA on a tiny SD: train, export, reload with diffusers, resume
 ```
 
 Every family implements the same small interface (`build`, `training_step`,
@@ -86,7 +100,7 @@ Every family implements the same small interface (`build`, `training_step`,
 git clone https://github.com/yar78/vision-generative-models-survey.git
 cd vision-generative-models-survey
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[notebook,dev]"
+pip install -e ".[notebook,finetune,dev]"
 jupyter lab notebooks/
 ```
 
@@ -116,6 +130,7 @@ cd vision-generative-models-survey
 bash scripts/runpod/setup.sh          # every new pod: installs deps, checks GPU + HF login
 bash scripts/runpod/train.sh configs/ray_dog/ddpm.yaml --push-to-hub
 tail -f /workspace/genmodels/outputs/diffusion-ddpm-ray-dog-64/train.log
+bash scripts/runpod/train.sh configs/ray_dog/dreambooth_lora.yaml --push-to-hub   # Stable Diffusion LoRA
 ```
 
 `train.sh` runs detached (closing the terminal does not stop it), writes to
@@ -130,7 +145,10 @@ TERMINATE_WHEN_DONE=1 bash scripts/runpod/train.sh configs/ray_dog/stylegan.yaml
 
 terminates the pod when training ends (outputs are already on the volume and,
 with `--push-to-hub`, on the Hub). Rough budgets on one modern GPU: MNIST configs
-5-30 min, Ray_dog configs 1-3 h, CIFAR-10 diffusion/flow configs ~10 h.
+5-30 min, Ray_dog configs 1-3 h, DreamBooth LoRA 30-45 min (24 GB GPU, ~12 GB used at
+batch 4; `train.gradient_checkpointing: true` for smaller cards), CIFAR-10
+diffusion/flow configs ~10 h. Stable Diffusion's weights (~2 GB) are cached in
+`HF_HOME` on the volume, so only the first pod downloads them.
 
 ## Hugging Face Hub
 
@@ -162,6 +180,16 @@ model = DiffusionModel.from_pretrained("yaryar78/diffusion-ddpm-ray-dog-64")
 images = model.generate(16, steps=50)   # (16, 3, 64, 64) in [-1, 1]
 ```
 
+The DreamBooth LoRA is pushed as a standard **diffusers LoRA** repo instead
+(`pytorch_lora_weights.safetensors`, with `base_model` and `instance_prompt` in the
+model card), so it loads without this package:
+
+```python
+pipe = StableDiffusionPipeline.from_pretrained("stable-diffusion-v1-5/stable-diffusion-v1-5", torch_dtype=torch.float16).to("cuda")
+pipe.load_lora_weights("yaryar78/dreambooth-lora-sd15-ray-dog")
+pipe("a photo of sks dog on the beach at sunset").images[0]
+```
+
 A finished run can also be pushed later: `python scripts/push_to_hub.py outputs/<name>`.
 
 ## Tests
@@ -171,7 +199,10 @@ pytest -q
 ```
 
 Trains every config for two steps on fake data on CPU, then checks the export,
-the `from_pretrained` round trip, the model card and checkpoint resume.
+the `from_pretrained` round trip, the model card and checkpoint resume. The
+DreamBooth test uses a tiny Stable Diffusion from the Hub (skipped offline or
+without the `finetune` extras) and checks that the exported LoRA, loaded with
+`pipe.load_lora_weights`, reproduces the trained model's output.
 
 ## Roadmap
 
@@ -180,7 +211,7 @@ the `from_pretrained` round trip, the model card and checkpoint resume.
 3. ~~Hugging Face datasets (Ray_dog) with DiffAugment and memorisation checks~~
 4. FID / precision-recall evaluation (`torch-fidelity`) recorded in `metrics.json`
 5. Latent models: VQ-VAE / KL autoencoder as a tokenizer, latent diffusion and latent flow matching
-6. Fine-tuning pretrained models on Ray_dog: DreamBooth / LoRA on Stable Diffusion and a flow model (SD3 / FLUX)
+6. ~~DreamBooth LoRA on Stable Diffusion 1.5 with Ray_dog~~ -- next: SDXL, text-encoder LoRA, captions, a flow-matching base (SD3 / FLUX)
 7. Reflow and distillation toward few-step generation
 8. Video generation
 
@@ -191,4 +222,5 @@ the `from_pretrained` round trip, the model card and checkpoint resume.
 - Zhao et al., *Differentiable Augmentation for Data-Efficient GAN Training*, 2020
 - Karras et al., *StyleGAN*, 2019 · *StyleGAN2*, 2020 · *StyleGAN2-ADA*, 2020
 - Ho et al., *DDPM*, 2020 · Song et al., *DDIM*, 2020 · Nichol & Dhariwal, *Improved DDPM*, 2021 · Ho & Salimans, *Classifier-Free Guidance*, 2022
+- Rombach et al., *Latent Diffusion*, 2022 · Ruiz et al., *DreamBooth*, 2022 · Hu et al., *LoRA*, 2021
 - Lipman et al., *Flow Matching for Generative Modeling*, 2022 · Liu et al., *Rectified Flow*, 2022 · Esser et al., *Scaling Rectified Flow Transformers (SD3)*, 2024

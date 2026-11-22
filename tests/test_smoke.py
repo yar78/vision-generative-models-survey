@@ -12,7 +12,8 @@ from genmodels import build_trainer
 from genmodels.common.config import load_config
 from genmodels.hub import render_model_card
 
-CONFIGS = sorted(str(p) for p in (Path(__file__).parents[1] / "configs").rglob("*.yaml"))
+CONFIGS = sorted(str(p) for p in (Path(__file__).parents[1] / "configs").rglob("*.yaml")
+                 if "dreambooth" not in p.name)  # fine-tuning configs: tests/test_dreambooth_lora.py
 
 
 def tiny(cfg):

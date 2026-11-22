@@ -18,6 +18,7 @@ FAMILIES = {
     "stylegan": "genmodels.stylegan",
     "diffusion": "genmodels.diffusion",
     "flow_matching": "genmodels.flow_matching",
+    "dreambooth_lora": "genmodels.dreambooth_lora",  # needs the [finetune] extras
 }
 
 

@@ -42,6 +42,7 @@ _DESCRIPTIONS = {
     "stylegan": "A compact StyleGAN2-style generator (mapping network, modulated convolutions, noise inputs) trained with the non-saturating loss and R1 regularisation.",
     "diffusion": "A DDPM: a U-Net trained to predict the noise added by a fixed Gaussian diffusion process; samples with DDPM or DDIM.",
     "flow_matching": "A conditional flow-matching / rectified-flow model: a U-Net velocity field integrated from noise to data with an ODE solver.",
+    "dreambooth_lora": "A DreamBooth LoRA for Stable Diffusion: low-rank adapters on the U-Net attention layers, fine-tuned so the identifier token in the instance prompt refers to one specific subject.",
 }
 
 
@@ -71,11 +72,23 @@ def render_model_card(run_dir: str | os.PathLike, repo_id: str) -> str:
     module, cls = info["model_class"].rsplit(".", 1)
     dataset = info.get("dataset")
 
-    front = {
-        "library_name": "pytorch",
-        "tags": ["genmodels", family.replace("_", "-"), "image-generation", "pytorch_model_hub_mixin"],
-        "pipeline_tag": "unconditional-image-generation",
-    }
+    is_lora = family == "dreambooth_lora"
+    if is_lora:
+        cfg_hub = cfg.get("hub") or {}
+        front = {
+            "base_model": info["base_model"],
+            "library_name": "diffusers",
+            "license": cfg_hub.get("license", "creativeml-openrail-m"),
+            "instance_prompt": info["instance_prompt"],
+            "tags": ["genmodels", "dreambooth", "lora", "diffusers", "text-to-image", "stable-diffusion"],
+            "pipeline_tag": "text-to-image",
+        }
+    else:
+        front = {
+            "library_name": "pytorch",
+            "tags": ["genmodels", family.replace("_", "-"), "image-generation", "pytorch_model_hub_mixin"],
+            "pipeline_tag": "unconditional-image-generation",
+        }
     if dataset in _HUB_DATASETS:
         front["datasets"] = [_HUB_DATASETS[dataset]]
     elif dataset and "/" in dataset:  # a Hub dataset repo, e.g. yaryar78/Ray_dog
@@ -100,6 +113,11 @@ def render_model_card(run_dir: str | os.PathLike, repo_id: str) -> str:
         ("Training time", f"{info.get('train_hours')} h"),
         ("Code", commit_link),
     ]
+    if is_lora:
+        rows[1:2] = [("Base model", f"[{info['base_model']}](https://huggingface.co/{info['base_model']})"),
+                     ("Instance prompt", f"`{info['instance_prompt']}`"),
+                     ("Prior preservation", f"`{info['class_prompt']}`" if info.get("class_prompt") else "off"),
+                     ("LoRA rank", info.get("lora_rank"))]
     table = "\n".join(f"| {k} | {v} |" for k, v in rows)
     metric_table = "\n".join(f"| {k} | {v:.5g} |" for k, v in metrics.items()) or "| - | - |"
 
@@ -131,7 +149,11 @@ The exact config is in [`train_config.yaml`](train_config.yaml); TensorBoard log
 
 ## Usage
 
-```bash
+{_lora_usage(info, repo_id) if is_lora else _usage(module, cls, repo_id)}"""
+
+
+def _usage(module: str, cls: str, repo_id: str) -> str:
+    return f"""```bash
 pip install git+{GITHUB_URL}
 ```
 
@@ -141,6 +163,22 @@ from {module} import {cls}
 model = {cls}.from_pretrained("{repo_id}")
 images = model.generate(16)   # tensor in [-1, 1], shape (16, C, H, W)
 ```
+"""
+
+
+def _lora_usage(info: dict, repo_id: str) -> str:
+    prompt = info["instance_prompt"]
+    return f"""```python
+import torch
+from diffusers import StableDiffusionPipeline
+
+pipe = StableDiffusionPipeline.from_pretrained("{info['base_model']}", torch_dtype=torch.float16).to("cuda")
+pipe.load_lora_weights("{repo_id}")
+image = pipe("{prompt} on the beach, golden hour", num_inference_steps=30, guidance_scale=7.5).images[0]
+```
+
+Use `{prompt}` in the prompt to get this subject. Lower the LoRA strength with
+`cross_attention_kwargs={{"scale": 0.7}}` if outputs copy the training photos too closely.
 """
 
 

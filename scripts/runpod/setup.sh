@@ -22,8 +22,8 @@ fi
 echo "== GPU"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || echo "WARNING: no GPU visible" >&2
 
-echo "== Installing genmodels (+ JupyterLab)"
-pip install -q -e ".[notebook]"
+echo "== Installing genmodels (+ JupyterLab, + diffusers/peft for fine-tuning)"
+pip install -q -e ".[notebook,finetune]"
 python -c "import torch; print('torch', torch.__version__, '| cuda available:', torch.cuda.is_available())"
 
 echo "== Hugging Face login"

@@ -1,0 +1,56 @@
+# DreamBooth LoRA on Stable Diffusion 1.5 with the Ray_dog photos at 512x512.
+# ~30-45 min for 2000 steps on a 24 GB GPU (4090 / RTX PRO 4000); ~12 GB VRAM at batch 4.
+# Output: a ~12 MB LoRA that loads with pipe.load_lora_weights(...).
+family: dreambooth_lora
+name: dreambooth-lora-sd15-ray-dog
+seed: 0
+data:
+  dataset: hf
+  hf_repo: yaryar78/Ray_dog
+  image_size: 512           # SD 1.5's native resolution
+  cache_size: 576           # photos are downscaled once to this short side, then randomly cropped
+  random_crop: true
+  crop_scale: [0.7, 1.0]    # keep most of the frame so Ray is rarely cropped out
+  hflip: true
+  batch_size: 4
+  num_workers: 4
+model:
+  pretrained: stable-diffusion-v1-5/stable-diffusion-v1-5
+  variant: fp16             # download the half-size weights (frozen weights run in bf16 anyway)
+  lora_rank: 16
+  lora_alpha: 16
+  target_modules: [to_k, to_q, to_v, to_out.0]
+method:
+  # "sks" is a rare token with little meaning to SD, so the subject's identity binds to it.
+  # Change it if outputs show artefacts (sks is also a rifle name); keep the class noun.
+  instance_prompt: a photo of sks dog
+  class_prompt: a photo of a dog
+  with_prior_preservation: true   # also train on base-model dog images, so "dog" alone stays generic
+  num_class_images: 200           # generated once (~3 min on a 4090), reused on resume
+  prior_loss_weight: 1.0
+  validation_prompts:
+    - a photo of sks dog
+    - a photo of sks dog on the beach at sunset
+    - an oil painting of sks dog in the style of van gogh
+    - a photo of sks dog wearing a red superhero cape
+    - a watercolor illustration of sks dog in a forest
+    - a photo of sks dog in times square
+    - a pencil sketch of sks dog
+    - a photo of a dog           # should NOT look like Ray if prior preservation works
+  sample_steps: 25
+  guidance_scale: 7.5
+train:
+  steps: 2000
+  lr: 1.0e-4
+  warmup_steps: 100
+  mixed_precision: bf16
+  gradient_checkpointing: false   # true: less VRAM, ~25% slower
+  grad_clip: 1.0
+  log_every: 25
+  sample_every: 250
+  ckpt_every: 250
+  n_samples: 8
+hub:
+  repo_id: null
+  private: true
+  license: creativeml-openrail-m  # Stable Diffusion 1.5's license applies to derivatives

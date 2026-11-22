@@ -18,10 +18,15 @@ How faces are found and aligned
    which rejects photos where the face is turned away or hidden.
 3. Eyes and nose are detected again on the face region alone, where they are
    larger and localised more precisely.
-4. If two eyes are found at a plausible distance, the photo is rotated so the eyes
-   are level ("aligned"); otherwise the crop is upright ("box-only").
-5. A square around the face box (``--margin`` x its longer side) is cut from the
-   *full-resolution* photo and resized to ``--size``.
+4. If two eyes are found, the photo is rotated so the eyes are level ("aligned"),
+   with the nose deciding which way is up; otherwise the crop is upright ("box-only").
+5. A square around the face box (up to ``--margin`` x its longer side) is cut from the
+   *full-resolution* photo and resized to ``--size``. It is never padded: near the
+   photo's edge the margin shrinks, and only then is the square shifted.
+6. Crops containing human faces (selfies) and near-duplicate shots are dropped.
+
+Detections are cached next to the output (``<out>.detections.json``), so changing
+crop settings and rebuilding takes seconds; detection itself is ~10 s/photo on CPU.
 
 Every kept image records in metadata.jsonl how it was produced (scores, whether it
 was aligned, roll angle, source crop size); rejected photos and the reason are
@@ -39,7 +44,7 @@ import sys
 from pathlib import Path
 
 DETECTOR = "IDEA-Research/grounding-dino-base"
-PROMPT_ALL = "dog face. dog eye. dog nose."
+PROMPT_ALL = "dog face. dog eye. dog nose. human face."
 PROMPT_PARTS = "dog eye. dog nose."
 
 
@@ -68,6 +73,11 @@ class Detector:
 
 def _area(b):
     return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def _iou(a, b):
+    inter = _area((max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])))
+    return inter / (_area(a) + _area(b) - inter + 1e-9)
 
 
 def _center(b):
@@ -103,6 +113,7 @@ def find_face(det: Detector, image, face_thr=0.3, part_thr=0.25):
     k = image.width / small.width  # small -> full-resolution coordinates
     dets = det(small, PROMPT_ALL, threshold=part_thr)
 
+    humans = [tuple(v * k for v in b) for lab, s, b in dets if lab == "human face" and s >= face_thr]
     faces = [(s, b) for lab, s, b in dets if lab == "dog face" and s >= face_thr]
     if not faces:
         return None, "no face detected"
@@ -131,70 +142,119 @@ def find_face(det: Detector, image, face_thr=0.3, part_thr=0.25):
     return {
         "face_box": face, "face_score": face_score,
         "eyes": [_center(b) for _, b in eyes], "nose": _center(noses[0][1]) if noses else None,
+        "human_faces": humans,
     }, None
 
 
 # ---- alignment + crop ---------------------------------------------------------------------
-def align_and_crop(image, f, size=512, margin=1.3, max_roll_without_nose=40.0):
-    """Rotate so the eyes are level, then cut a square centred on the face.
+def _square_fits(width, height, cx, cy, side, roll):
+    """Do all four corners of a ``side`` square centred at (cx, cy), rotated by ``roll``, lie in the photo?"""
+    r = math.radians(roll)
+    for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+        x = cx + (dx * math.cos(r) - dy * math.sin(r)) * side / 2
+        y = cy + (dx * math.sin(r) + dy * math.cos(r)) * side / 2
+        if not (0 <= x <= width and 0 <= y <= height):
+            return False
+    return True
 
-    * Two eyes give the roll angle. Which way is "up" is ambiguous from the eyes alone
-      (a head turned 80 deg could be rolled +80 or -100), so with a nose the rotation
-      is chosen that puts the nose *below* the eyes -- any roll can then be corrected.
-      Without a nose only rolls up to ``max_roll_without_nose`` are corrected.
-    * The square is ``margin`` x the face box's longer side, centred on the face box.
-      Where it reaches past the photo's edge (often after a large rotation) the photo is
-      mirror-padded rather than left black; ``outside_fraction`` records how much of
-      the crop is padding.
+
+def _largest_fit(width, height, cx, cy, lo, hi, roll):
+    """Largest side in [lo, hi] whose centred square fits, or None."""
+    if not _square_fits(width, height, cx, cy, lo, roll):
+        return None
+    if _square_fits(width, height, cx, cy, hi, roll):
+        return hi
+    for _ in range(20):  # bisection
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if _square_fits(width, height, cx, cy, mid, roll) else (lo, mid)
+    return lo
+
+
+def _estimate_roll(f, max_roll_without_nose):
+    """Roll (degrees) that levels the eyes, or None. With a nose any roll is allowed: the nose
+    decides which way is up (a head turned 80 deg could otherwise be rolled +80 or -100)."""
+    if len(f["eyes"]) != 2:
+        return None
+    (x1, y1), (x2, y2) = sorted(f["eyes"])  # left-most eye first
+    ex, ey = x2 - x1, y2 - y1
+    roll = math.degrees(math.atan2(ey, ex))  # in (-90, 90]
+    nose = f["nose"]
+    if nose is not None:
+        nx, ny = nose[0] - (x1 + x2) / 2, nose[1] - (y1 + y2) / 2
+        if math.hypot(nx, ny) > 0.3 * math.hypot(ex, ey):  # nose clearly separate from the eyes
+            r = math.radians(roll)
+            # y of the eye->nose vector after rotating the image by `roll` (PIL: counter-clockwise)
+            if -nx * math.sin(r) + ny * math.cos(r) < 0:
+                roll = roll + 180 if roll <= 0 else roll - 180
+            return roll
+    return roll if abs(roll) <= max_roll_without_nose else None
+
+
+def align_and_crop(image, f, size=512, margin=1.3, min_margin=1.0, max_roll_without_nose=40.0):
+    """Cut a square around the face from the full-resolution photo -- never padded.
+
+    1. If the eyes give a roll angle, try a square rotated by it and centred on the face,
+       with the largest margin in [min_margin, margin] x face size that stays inside the photo.
+    2. Otherwise (or if no rotated square fits), the same upright.
+    3. If even the tightest centred square does not fit (face at the photo's edge),
+       an upright square is shifted inside the photo: the face is then off-centre.
     """
-    import numpy as np
     from PIL import Image
 
     face = f["face_box"]
     cx, cy = _center(face)
-    side = margin * max(face[2] - face[0], face[3] - face[1])
+    long_side = max(face[2] - face[0], face[3] - face[1])
+    hi = min(margin * long_side, image.width, image.height)
+    lo = min(min_margin * long_side, hi)
+    roll = _estimate_roll(f, max_roll_without_nose)
+    note = ""
 
-    roll, aligned = 0.0, False
-    if len(f["eyes"]) == 2:
-        (x1, y1), (x2, y2) = sorted(f["eyes"])          # left-most eye first
-        ex, ey = x2 - x1, y2 - y1
-        roll = math.degrees(math.atan2(ey, ex))          # in (-90, 90]
-        nose = f["nose"]
-        eye_dist = math.hypot(ex, ey)
-        if nose is not None:
-            nx, ny = nose[0] - (x1 + x2) / 2, nose[1] - (y1 + y2) / 2
-            if math.hypot(nx, ny) > 0.3 * eye_dist:      # nose clearly separate from the eyes
-                r = math.radians(roll)
-                # y of the eye->nose vector after rotating the image by `roll` (PIL: counter-clockwise)
-                if -nx * math.sin(r) + ny * math.cos(r) < 0:
-                    roll = roll + 180 if roll <= 0 else roll - 180   # nose would end up above: flip
-                aligned = True
-        if not aligned and abs(roll) <= max_roll_without_nose:
-            aligned = True
-    if not aligned:
-        roll = 0.0
+    side = None
+    if roll is not None:
+        side = _largest_fit(image.width, image.height, cx, cy, lo, hi, roll)
+        if side is None:
+            note = "rotation skipped: face too close to the edge"
+    if side is None:
+        roll_used = 0.0
+        side = _largest_fit(image.width, image.height, cx, cy, lo, hi, 0.0)
+    else:
+        roll_used = roll
+    centred = side is not None
+    if not centred:  # shift the square inside the photo
+        side = hi
+        x0 = min(max(cx - side / 2, 0), image.width - side)
+        y0 = min(max(cy - side / 2, 0), image.height - side)
+        crop = image.crop((round(x0), round(y0), round(x0 + side), round(y0 + side)))
+        ccx, ccy = x0 + side / 2, y0 + side / 2
+    else:
+        img = image.rotate(roll_used, resample=Image.BICUBIC, center=(cx, cy)) if abs(roll_used) > 0.5 else image
+        crop = img.crop((round(cx - side / 2), round(cy - side / 2), round(cx + side / 2), round(cy + side / 2)))
+        ccx, ccy = cx, cy
+    crop = crop.resize((size, size), Image.LANCZOS)
 
-    # Mirror-pad so a centred (and possibly rotated) square never reaches outside the array.
-    arr = np.asarray(image)
-    pad = int(min(side, min(arr.shape[:2]) - 1))
-    padded = Image.fromarray(np.pad(arr, ((pad, pad), (pad, pad), (0, 0)), mode="reflect"))
-    pcx, pcy = cx + pad, cy + pad
-    if abs(roll) > 0.5:
-        padded = padded.rotate(roll, resample=Image.BICUBIC, center=(pcx, pcy))
-    side = min(side, padded.width, padded.height)
-    x0 = min(max(pcx - side / 2, 0), padded.width - side)
-    y0 = min(max(pcy - side / 2, 0), padded.height - side)
-    crop = padded.crop((round(x0), round(y0), round(x0 + side), round(y0 + side))).resize((size, size), Image.LANCZOS)
+    # Share of the crop covered by human faces (selfies), sampled on a grid in photo coordinates.
+    # The detector also calls the dog's own face a "human face": such boxes overlap the dog's
+    # face box (IoU ~0.5-0.65) or sit inside a loose one. A real person beside the dog
+    # overlaps far less (on Ray_dog: IoU ~0.15, about half inside).
+    def _contained(b):
+        return _area((max(b[0], face[0]), max(b[1], face[1]), min(b[2], face[2]), min(b[3], face[3]))) / (_area(b) + 1e-9)
 
-    # How much of the crop came from padding: map a grid of crop points back to the photo.
-    g = np.linspace(0, 1, 24)
-    gx, gy = np.meshgrid(x0 + g * side - pcx, y0 + g * side - pcy)
-    r = math.radians(roll)  # undo the counter-clockwise rotation
-    ox = cx + gx * math.cos(r) - gy * math.sin(r)
-    oy = cy + gx * math.sin(r) + gy * math.cos(r)
-    inside = (ox >= 0) & (ox < image.width) & (oy >= 0) & (oy < image.height)
-    return crop, {"aligned": aligned, "roll_degrees": round(roll, 2), "source_crop_px": int(side),
-                  "outside_fraction": round(1 - float(inside.mean()), 3)}
+    humans = [b for b in f.get("human_faces", []) if _iou(b, face) < 0.3 and _contained(b) < 0.8]
+    human = 0.0
+    if humans:
+        r = math.radians(roll_used)
+        n, hits = 24, 0
+        for i in range(n):
+            for j in range(n):
+                dx, dy = (i + 0.5) / n * side - side / 2, (j + 0.5) / n * side - side / 2
+                x = ccx + dx * math.cos(r) - dy * math.sin(r)
+                y = ccy + dx * math.sin(r) + dy * math.cos(r)
+                hits += any(_inside((x, y), b) for b in humans)
+        human = hits / n ** 2
+    return crop, {"aligned": roll is not None and not note,
+                  "roll_degrees": round(roll_used, 2), "source_crop_px": int(side),
+                  "margin_used": round(side / long_side, 3), "centred": centred,
+                  "human_face_fraction": round(human, 3), "note": note}
 
 
 def _thumb_key(im):
@@ -254,18 +314,38 @@ def build(args):
     ds = load_dataset(args.source, split=args.split, cache_dir=args.cache_dir)
     if args.limit:
         ds = ds.select(range(min(args.limit, len(ds))))
-    det = Detector(device=args.device)
-    print(f"{len(ds)} photos; detector {DETECTOR} on {det.device}")
+    print(f"{len(ds)} photos")
+
+    # Detections are cached: re-cropping with other settings then takes seconds, not an hour.
+    cache_path = Path(args.detections or str(out).rstrip("/") + ".detections.json")
+    sig = {"detector": DETECTOR, "prompt": PROMPT_ALL, "face_threshold": args.face_threshold,
+           "part_threshold": args.part_threshold, "source": args.source, "split": args.split}
+    cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+    if cache.get("signature") != sig:
+        cache = {"signature": sig, "items": {}}
+    det = None
 
     kept, rejected, seen = [], [], []
     for i, ex in enumerate(ds):
         img = ex["image"].convert("RGB")
-        f, reason = find_face(det, img, args.face_threshold, args.part_threshold)
+        if str(i) in cache["items"]:
+            f, reason = cache["items"][str(i)]
+        else:
+            if det is None:
+                det = Detector(device=args.device)
+                print(f"detector {DETECTOR} on {det.device}")
+            f, reason = find_face(det, img, args.face_threshold, args.part_threshold)
+            cache["items"][str(i)] = [f, reason]
+            cache_path.write_text(json.dumps(cache))
         if f is None:
             rejected.append({"source_index": i, "reason": reason})
             print(f"[{i:3d}] rejected: {reason}")
             continue
-        crop, info = align_and_crop(img, f, args.size, args.margin)
+        crop, info = align_and_crop(img, f, args.size, args.margin, args.min_margin)
+        if info["human_face_fraction"] > args.max_human_fraction:
+            rejected.append({"source_index": i, "reason": f"human face covers {info['human_face_fraction']:.0%} of the crop"})
+            print(f"[{i:3d}] rejected: human face in crop ({info['human_face_fraction']:.0%})")
+            continue
         if info["source_crop_px"] < args.min_source_px:
             rejected.append({"source_index": i, "reason": f"face too small ({info['source_crop_px']} px < {args.min_source_px})"})
             print(f"[{i:3d}] rejected: face too small")
@@ -282,7 +362,7 @@ def build(args):
         row = {"file_name": name, "source_index": i, "face_score": round(f["face_score"], 3),
                "eyes_found": len(f["eyes"]), "nose_found": f["nose"] is not None, **info}
         kept.append(row)
-        print(f"[{i:3d}] {'aligned' if info['aligned'] else 'box-only'} roll={info['roll_degrees']:+.1f} pad={info['outside_fraction']:.2f} "
+        print(f"[{i:3d}] {'aligned' if info['aligned'] else 'box-only'} roll={info['roll_degrees']:+.1f} margin={info['margin_used']:.2f}{'' if info['centred'] else ' SHIFTED'} "
               f"src={info['source_crop_px']}px face={f['face_score']:.2f} eyes={len(f['eyes'])}")
 
     _write_metadata(out, kept)
@@ -290,7 +370,8 @@ def build(args):
     info = {
         "source_dataset": args.source, "source_split": args.split,
         "source_revision": _hub_revision(args.source),
-        "detector": DETECTOR, "detector_revision": det.revision,
+        "detector": DETECTOR, "prompt": PROMPT_ALL, "max_human_fraction": args.max_human_fraction,
+        "min_margin": args.min_margin,
         "face_threshold": args.face_threshold, "part_threshold": args.part_threshold,
         "margin": args.margin, "size": args.size, "min_source_px": args.min_source_px,
         "dup_threshold": None if args.keep_duplicates else args.dup_threshold,
@@ -316,8 +397,8 @@ def _sheets(out, kept, ds=None, rejected=None):
         c = f"#{r['source_index']} {'A' if r['aligned'] else 'box'}"
         if r["aligned"] and abs(r["roll_degrees"]) >= 1:
             c += f" {r['roll_degrees']:+.0f}°"
-        if r.get("outside_fraction", 0) > 0.05:
-            c += f" pad{r['outside_fraction']:.0%}"
+        if not r.get("centred", True):
+            c += " shifted"
         return c
 
     contact_sheet([(Image.open(out / r["file_name"]), cap(r)) for r in kept],
@@ -375,18 +456,19 @@ centred and -- where both eyes were found -- rotated so the eyes are level, resi
 | Source photos | {info['n_source']} |
 | Kept crops | {len(ds)} |
 | Eye-aligned | {info['n_aligned']} (the rest are upright crops around the detected face box) |
-| Rejected automatically | {info['n_rejected']} (no visible face, face too small, or a duplicate photo) |
+| Rejected automatically | {info['n_rejected']} (no visible face, a human face in the crop, face too small, or a duplicate photo) |
 | Removed on review | {len(info.get('excluded_by_review', []))} (`{info.get('excluded_by_review', [])}`) |
 
 ## How it was made
 
 1. [{info['detector']}](https://huggingface.co/{info['detector']}) (Grounding DINO, zero-shot) prompted with
-   `dog face. dog eye. dog nose.` (face threshold {info['face_threshold']}, parts {info['part_threshold']}).
+   `{info.get('prompt', 'dog face. dog eye. dog nose.')}` (face threshold {info['face_threshold']}, parts {info['part_threshold']}).
 2. A face box is kept only if an eye or nose detection lies inside it.
 3. Eyes and nose are re-detected on the face region; with two eyes the photo is rotated so they are level
    (the nose decides which way is up, so sideways heads are corrected too).
-4. A square of {info['margin']}x the face box's longer side, centred on the face, is cut from the full-resolution
-   photo (mirror-padded where it passes the edge) and near-duplicate photos are dropped.
+4. A square of up to {info['margin']}x the face box's longer side, centred on the face, is cut from the full-resolution
+   photo -- never padded: near the edge the margin shrinks (down to {info.get('min_margin', 1.0)}x), and only then is the
+   square shifted. Crops with human faces and near-duplicate photos are dropped.
 
 Code: [`scripts/data/make_face_dataset.py`](https://github.com/yar78/vision-generative-models-survey/blob/{info.get('code_commit') or 'main'}/scripts/data/make_face_dataset.py)
 at commit `{info.get('code_commit')}`, reading `{info['source_dataset']}` at revision `{info.get('source_revision')}`.
@@ -403,7 +485,9 @@ Full parameters in `build_info.json`.
 | `aligned` | True if rotated to level the eyes |
 | `roll_degrees` | rotation applied |
 | `source_crop_px` | side of the square cut from the original photo (below {info['size']} means upscaled) |
-| `outside_fraction` | share of the crop beyond the photo's edge, filled by mirror padding |
+| `margin_used` | crop side / face box size (below the target when the photo edge was near) |
+| `centred` | False if the square had to be shifted off-centre to stay inside the photo |
+| `human_face_fraction` | share of the crop covered by detected human faces |
 
 ## Use
 
@@ -442,6 +526,9 @@ def main():
     b.add_argument("--out", required=True)
     b.add_argument("--size", type=int, default=512)
     b.add_argument("--margin", type=float, default=1.3, help="crop side = margin x face box's longer side")
+    b.add_argument("--min-margin", type=float, default=1.0, help="tightest margin allowed when the photo edge is near")
+    b.add_argument("--max-human-fraction", type=float, default=0.03, help="reject crops where human faces cover more than this")
+    b.add_argument("--detections", help="detection cache file (default: <out>.detections.json)")
     b.add_argument("--face-threshold", type=float, default=0.3)
     b.add_argument("--part-threshold", type=float, default=0.25)
     b.add_argument("--min-source-px", type=int, default=128, help="reject faces smaller than this in the original")

@@ -58,6 +58,30 @@ of one dog, mixed resolutions (mostly ~2000 px), every pose and background. The
   nearest training photo), because with this little data diffusion and flow
   models will start copying.
 
+### Ray_dog_faces (derived)
+
+`yaryar78/Ray_dog_faces`: Ray's face cropped from every usable Ray_dog photo,
+centred, rotated so the eyes are level, 512x512. Built by
+
+```bash
+python scripts/data/make_face_dataset.py build --out data/ray_dog_faces     # detect, align, crop
+python scripts/data/make_face_dataset.py build --out data/ray_dog_faces --exclude 12,40   # after review
+python scripts/data/make_face_dataset.py push --out data/ray_dog_faces --repo-id yaryar78/Ray_dog_faces
+```
+
+* **Grounding DINO** (zero-shot detection, prompted `dog face. dog eye. dog nose.`)
+  finds the face; a face box counts only if an eye or nose lies inside it.
+* **Alignment:** with two eyes the photo is rotated so they are level, and the nose
+  decides which way is up, so sideways heads are corrected too. Otherwise the crop is upright.
+* **Rejected automatically:** no visible face, face too small, or a duplicate.
+  Ray_dog contains several re-framings of the same shot, whose face crops coincide.
+* `contact_sheet.jpg` shows every crop with its index, for a manual pass with `--exclude`.
+* Every crop's provenance (source row, scores, roll angle, padding) is a dataset
+  column; `build_info.json` records the detector, thresholds, source revision and code commit.
+
+Configs in `configs/ray_dog_faces/` (StyleGAN2, DDPM) train on it at 64x64 with no
+random crops, which would undo the alignment.
+
 The strongest results on a dataset this size come from fine-tuning a pretrained
 model: `configs/ray_dog/dreambooth_lora.yaml` / notebook 06 teaches Stable
 Diffusion 1.5 the identifier `sks dog` with a ~12 MB LoRA, so prompts like
@@ -85,6 +109,7 @@ scripts/
   push_to_hub.py     push an already-finished run directory
   runpod/setup.sh    one-time setup on a fresh pod
   runpod/train.sh    detached training + TensorBoard on a pod
+  data/make_face_dataset.py  build + upload the aligned dog-face dataset
 tests/
   test_smoke.py           every from-scratch config: train -> checkpoint -> export -> reload -> resume
   test_dreambooth_lora.py DreamBooth LoRA on a tiny SD: train, export, reload with diffusers, resume

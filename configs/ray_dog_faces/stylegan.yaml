@@ -1,0 +1,37 @@
+# StyleGAN2 + DiffAugment on Ray's aligned face crops (yaryar78/Ray_dog_faces) at 64x64.
+# Aligned faces are what StyleGAN was designed for (FFHQ / AFHQ are built the same way):
+# compare with configs/ray_dog/stylegan.yaml, which sees whole, unaligned photos.
+family: stylegan
+name: stylegan2-ray-dog-faces-64
+seed: 0
+data:
+  dataset: hf
+  hf_repo: yaryar78/Ray_dog_faces   # built by scripts/data/make_face_dataset.py
+  image_size: 64
+  cache_size: 64            # crops are already square and centred: just resize
+  random_crop: false        # cropping would undo the alignment
+  hflip: true
+  batch_size: 32
+  num_workers: 4
+model:
+  z_dim: 256
+  w_dim: 256
+  mapping_layers: 8
+  channels: 256
+  max_channels: 256
+  d_channels: 256
+method:
+  r1_gamma: 0.1
+  r1_every: 16
+  style_mixing_prob: 0.9
+  diffaugment: color,translation,cutout
+train:
+  steps: 50000
+  lr: 2.0e-3
+  ema_decay: 0.999
+  log_every: 50
+  sample_every: 1000
+  ckpt_every: 2000
+hub:
+  repo_id: null
+  private: true

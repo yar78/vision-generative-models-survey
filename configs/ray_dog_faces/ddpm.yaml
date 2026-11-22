@@ -1,0 +1,36 @@
+# DDPM on Ray's aligned face crops at 64x64. Same network as configs/ray_dog/ddpm.yaml,
+# so the two show what alignment buys a diffusion model.
+family: diffusion
+name: diffusion-ddpm-ray-dog-faces-64
+seed: 0
+data:
+  dataset: hf
+  hf_repo: yaryar78/Ray_dog_faces
+  image_size: 64
+  cache_size: 64
+  random_crop: false
+  hflip: true
+  batch_size: 32
+  num_workers: 4
+model:
+  base_channels: 64
+  channel_mults: [1, 2, 2, 4]
+  num_res_blocks: 2
+  attn_resolutions: [16]
+  dropout: 0.2
+method:
+  timesteps: 1000
+  schedule: cosine
+  conditional: false
+  sample_steps: 50
+train:
+  steps: 40000
+  lr: 1.0e-4
+  warmup_steps: 1000
+  ema_decay: 0.999
+  log_every: 50
+  sample_every: 2000
+  ckpt_every: 2000
+hub:
+  repo_id: null
+  private: true

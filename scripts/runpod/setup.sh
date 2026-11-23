@@ -15,6 +15,8 @@ cd "$REPO"
 
 if [[ -d /workspace ]]; then
   export HF_HOME=/workspace/.cache/huggingface
+  # Make every new terminal on this pod find the login and model cache on the volume too.
+  grep -q "HF_HOME=/workspace" ~/.bashrc 2>/dev/null || echo 'export HF_HOME=/workspace/.cache/huggingface' >> ~/.bashrc
 else
   echo "WARNING: /workspace not found -- not on a RunPod pod with a network volume? Outputs will go to ./outputs." >&2
 fi

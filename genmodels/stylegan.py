@@ -54,6 +54,22 @@ class EqualLinear(nn.Module):
         return F.linear(x, self.weight * self.scale, self.bias * self.lr_mul)
 
 
+class EqualConv2d(nn.Module):
+    """Conv2d with the equalised learning rate: N(0,1) weights scaled by 1/sqrt(fan_in) at
+    runtime. StyleGAN's learning rate (~2e-3) assumes this in *both* networks; with plain
+    PyTorch layers the discriminator takes steps 10-100x too large and its logits explode."""
+
+    def __init__(self, cin, cout, kernel, padding=0, bias=True):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(cout, cin, kernel, kernel))
+        self.bias = nn.Parameter(torch.zeros(cout)) if bias else None
+        self.scale = 1 / math.sqrt(cin * kernel ** 2)
+        self.padding = padding
+
+    def forward(self, x):
+        return F.conv2d(x, self.weight * self.scale, self.bias, padding=self.padding)
+
+
 class MappingNetwork(nn.Module):
     def __init__(self, z_dim, w_dim, n_layers=8, lr_mul=0.01, w_avg_beta=0.995):
         super().__init__()
@@ -182,9 +198,9 @@ class DiscBlock(nn.Module):
 
     def __init__(self, cin, cout):
         super().__init__()
-        self.conv1 = nn.Conv2d(cin, cin, 3, padding=1)
-        self.conv2 = nn.Conv2d(cin, cout, 3, padding=1)
-        self.skip = nn.Conv2d(cin, cout, 1, bias=False)
+        self.conv1 = EqualConv2d(cin, cin, 3, padding=1)
+        self.conv2 = EqualConv2d(cin, cout, 3, padding=1)
+        self.skip = EqualConv2d(cin, cout, 1, bias=False)
 
     def forward(self, x):
         h = F.leaky_relu(self.conv1(x), 0.2)
@@ -197,13 +213,13 @@ class StyleGANDiscriminator(nn.Module):
         super().__init__()
         n_down = int(math.log2(image_size)) - 2
         chans = [min(max_channels, channels // 2 ** max(0, i - 1)) for i in range(n_down + 1)][::-1]
-        self.from_rgb = nn.Conv2d(in_channels, chans[0], 1)
+        self.from_rgb = EqualConv2d(in_channels, chans[0], 1)
         self.blocks = nn.Sequential(*[DiscBlock(chans[i], chans[i + 1]) for i in range(n_down)])
         self.mbstd_group = mbstd_group
         c = chans[-1]
-        self.conv = nn.Conv2d(c + 1, c, 3, padding=1)
-        self.fc = nn.Linear(c * 16, c)
-        self.out = nn.Linear(c, 1)
+        self.conv = EqualConv2d(c + 1, c, 3, padding=1)
+        self.fc = EqualLinear(c * 16, c)
+        self.out = EqualLinear(c, 1)
 
     def minibatch_std(self, x):
         """Append the across-batch std as a feature map, so D can spot low diversity."""
@@ -242,12 +258,14 @@ class Trainer(BaseTrainer):
                                        max_channels=m.get("max_channels", 256)).to(self.device)
         self.nets = {"G": self.G, "D": self.D}
         lr = float(self.train_cfg.get("lr", 2.5e-3))
-        betas = (0.0, 0.99)
-        self.opts = {"G": torch.optim.Adam(self.G.parameters(), lr, betas=betas),
-                     "D": torch.optim.Adam(self.D.parameters(), lr, betas=betas)}
-        self.add_ema("G")
         self.r1_gamma = float(self.method_cfg.get("r1_gamma", 0.05))
         self.r1_every = int(self.method_cfg.get("r1_every", 16))
+        # Lazy regularisation (StyleGAN2 appendix B): R1 runs every r1_every steps, so D's
+        # optimizer is adjusted as if the penalty were spread over every step.
+        c = self.r1_every / (self.r1_every + 1)
+        self.opts = {"G": torch.optim.Adam(self.G.parameters(), lr, betas=(0.0, 0.99)),
+                     "D": torch.optim.Adam(self.D.parameters(), lr * c, betas=(0.0, 0.99 ** c))}
+        self.add_ema("G")
         self.mixing_prob = float(self.method_cfg.get("style_mixing_prob", 0.9))
         self.augment = self.method_cfg.get("diffaugment")  # e.g. "color,translation,cutout" for small datasets
 

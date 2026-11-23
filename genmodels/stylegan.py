@@ -13,7 +13,8 @@ What makes it different from a DCGAN generator:
 * **Skip-connection toRGB outputs** summed across resolutions.
 * **Style mixing**: during training, some layers get w from a second z, so
   layers learn to control separable aspects (coarse layers = pose/shape, fine
-  layers = colour/texture).
+  layers = colour/texture). Implemented (``method.style_mixing_prob``) but off
+  by default here: at this small scale it caused mode collapse.
 * **Truncation trick** at sampling: w' = w_avg + psi * (w - w_avg) trades
   diversity for quality.
 
@@ -266,7 +267,12 @@ class Trainer(BaseTrainer):
         self.opts = {"G": torch.optim.Adam(self.G.parameters(), lr, betas=(0.0, 0.99)),
                      "D": torch.optim.Adam(self.D.parameters(), lr * c, betas=(0.0, 0.99 ** c))}
         self.add_ema("G")
-        self.mixing_prob = float(self.method_cfg.get("style_mixing_prob", 0.9))
+        # Style-mixing regularisation is 0.9 in the paper, but in these small models (64-256
+        # channels, 32-64 px, a few hundred to 60k images) it drove the generator to mode
+        # collapse: on MNIST, output diversity across z fell from ~0.3 to ~0.1 within 1500
+        # steps with mixing, and stayed at ~0.3 for 4000 steps without. Off by default;
+        # style mixing at *inference* (notebook 03) works either way.
+        self.mixing_prob = float(self.method_cfg.get("style_mixing_prob", 0.0))
         self.augment = self.method_cfg.get("diffaugment")  # e.g. "color,translation,cutout" for small datasets
 
     def D_aug(self, x):

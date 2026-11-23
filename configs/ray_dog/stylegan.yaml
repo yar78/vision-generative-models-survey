@@ -23,7 +23,7 @@ model:
 method:
   r1_gamma: 0.1
   r1_every: 16
-  style_mixing_prob: 0.9
+  style_mixing_prob: 0.0   # 0.9 in the paper; at this scale training with mixing collapses G (see genmodels/stylegan.py)
   diffaugment: color,translation,cutout
 train:
   steps: 50000

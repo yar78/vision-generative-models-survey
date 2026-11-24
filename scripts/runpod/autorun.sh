@@ -8,6 +8,9 @@
 #   AUTORUN_CONFIGS  comma-separated configs, trained side by side on the one GPU, each
 #                    pushed to the Hub when done (needs a Hugging Face login: training
 #                    waits for one -- run scripts/runpod/claude_remote.sh in the pod terminal)
+#   AUTORUN_COMMANDS optional shell commands, separated by ';;', run one after another in the
+#                    repo (after the Hugging Face login, before training), output appended
+#                    to /workspace/autorun.log -- e.g. an evaluation script
 #   MAX_HOURS        cost guard: the pod terminates itself this long after boot, whatever
 #                    it is doing (0 = never). Outputs are pushed to the Hub as runs finish.
 #
@@ -56,6 +59,17 @@ grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bi
 status waiting-for-hf-login
 until python3 -c "from huggingface_hub import whoami; whoami()" >/dev/null 2>&1; do sleep 20; done
 echo "$(date -Is) Hugging Face login found"
+
+# ---- one-off commands (e.g. evaluations) ------------------------------------------------
+if [[ -n "${AUTORUN_COMMANDS:-}" ]]; then
+  status running-commands
+  while IFS= read -r cmd; do
+    cmd="$(echo "$cmd" | sed 's/^ *//; s/ *$//')"
+    [[ -z "$cmd" ]] && continue
+    echo "$(date -Is) running: $cmd"
+    bash -c "$cmd" || echo "$(date -Is) command failed (exit $?): $cmd"
+  done < <(echo "$AUTORUN_COMMANDS" | sed 's/;;/\n/g')
+fi
 
 # ---- train ----------------------------------------------------------------------------
 status training

@@ -7,6 +7,10 @@ seed: 0
 data:
   dataset: hf
   hf_repo: yaryar78/Ray_dog
+  # Rows left out (found while building yaryar78/Ray_dog_faces, see its build_info.json):
+  # other dogs, which would blur who "sks dog" is, and selfies with people's faces, which
+  # leak people into samples. 38 of 258 photos.
+  exclude_indices: [12, 23, 30, 34, 46, 47, 48, 53, 54, 62, 70, 81, 87, 90, 106, 128, 155, 156, 157, 158, 159, 160, 167, 168, 169, 170, 171, 183, 184, 216, 225, 226, 231, 233, 235, 237, 252, 253]
   image_size: 512           # SD 1.5's native resolution
   cache_size: 576           # photos are downscaled once to this short side, then randomly cropped
   random_crop: true

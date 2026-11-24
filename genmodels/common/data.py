@@ -43,7 +43,8 @@ class HFImages(Dataset):
     """
 
     def __init__(self, repo: str, split: str = "train", image_column: str | None = None,
-                 label_column: str | None = None, cache_size: int = 96, transform=None, cache_dir=None):
+                 label_column: str | None = None, cache_size: int = 96, transform=None, cache_dir=None,
+                 exclude_indices=()):
         from datasets import Image as HFImage
         from datasets import load_dataset
 
@@ -53,7 +54,10 @@ class HFImages(Dataset):
             if image_column is None:
                 raise ValueError(f"No image column found in {repo}; set data.image_column")
         self.images, self.labels = [], []
-        for ex in ds:
+        skip = set(exclude_indices or ())
+        for i, ex in enumerate(ds):
+            if i in skip:  # e.g. photos of other dogs, found on review
+                continue
             img = ex[image_column].convert("RGB")
             img = transforms.functional.resize(img, cache_size, antialias=True)
             self.images.append(img)
@@ -87,6 +91,8 @@ def get_dataset(data_cfg: dict, train: bool = True) -> Dataset:
     ``hf`` (a Hugging Face Hub dataset given by ``hf_repo``),
     ``folder`` (any ImageFolder-style directory given by ``path``) and ``fake``.
 
+    ``exclude_indices`` (hf only): rows of the Hub dataset to leave out.
+
     Augmentation keys: ``hflip`` (random horizontal flip) and ``random_crop``
     (random square crop covering ``crop_scale`` of the image, instead of a centre
     crop -- useful for small photo datasets with varied framing).
@@ -113,6 +119,7 @@ def get_dataset(data_cfg: dict, train: bool = True) -> Dataset:
             image_column=data_cfg.get("image_column"), label_column=data_cfg.get("label_column"),
             cache_size=int(data_cfg.get("cache_size", round(size * 1.5))), transform=tf,
             cache_dir=data_cfg.get("root") or default_data_root() / "hf",
+            exclude_indices=data_cfg.get("exclude_indices"),
         )
     if name == "folder":
         return datasets.ImageFolder(data_cfg["path"], transform=tf)

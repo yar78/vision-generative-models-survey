@@ -69,6 +69,9 @@ class DiffusionModel(nn.Module, PyTorchModelHubMixin):
             "sqrt_one_minus_abar": (1 - abar).sqrt(),
             # posterior q(x_{t-1} | x_t, x_0) variance (Ho et al. eq. 7)
             "posterior_var": betas * (1 - abar_prev) / (1 - abar),
+            # posterior mean = c0 * x_0 + ct * x_t  (Ho et al. eq. 7)
+            "posterior_c0": betas * abar_prev.sqrt() / (1 - abar),
+            "posterior_ct": (1 - abar_prev) * (1 - betas).sqrt() / (1 - abar),
         }.items():
             self.register_buffer(name, val.float(), persistent=False)
 
@@ -108,9 +111,14 @@ class DiffusionModel(nn.Module, PyTorchModelHubMixin):
         x, traj = self._start(n, device), []
         for t in reversed(range(self.T)):
             eps = self.predict_eps(x, t, y, guidance_scale)
-            abar, beta = self.alphas_cumprod[t], self.betas[t]
-            # mean of p(x_{t-1} | x_t) = 1/sqrt(alpha_t) * (x_t - beta_t / sqrt(1 - abar_t) * eps)
-            mean = (x - beta / (1 - abar).sqrt() * eps) / (1 - beta).sqrt()
+            abar = self.alphas_cumprod[t]
+            # Predict the clean image, clip it to the data range, then take the mean of the
+            # posterior q(x_{t-1} | x_t, x_0). Algebraically the same as the paper's
+            # 1/sqrt(alpha_t) * (x_t - beta_t / sqrt(1 - abar_t) * eps), but without clipping
+            # that form divides by sqrt(1 - beta_t): with the cosine schedule beta_t reaches
+            # 0.999 near t = T, errors are amplified ~30x per step and samples saturate.
+            x0 = ((x - (1 - abar).sqrt() * eps) / abar.sqrt()).clamp(-1, 1)
+            mean = self.posterior_c0[t] * x0 + self.posterior_ct[t] * x
             x = mean + self.posterior_var[t].sqrt() * torch.randn_like(x) if t > 0 else mean
             if return_trajectory and t % (self.T // 10) == 0:
                 traj.append(x.clamp(-1, 1).cpu())

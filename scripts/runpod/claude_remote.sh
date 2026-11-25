@@ -8,7 +8,13 @@
 # Both logins are stored on the pod's /workspace disk. Remote Control runs inside tmux
 # (session "claude-rc"), so it keeps running after you close the terminal; reattach with
 #   tmux attach -t claude-rc
+#
+#   --no-login   never prompt: start Remote Control only if Claude is already logged in
+#                (autorun.sh calls this at boot, so a pod whose /workspace already holds a
+#                Claude login gets its agent without any manual step)
 set -euo pipefail
+NO_LOGIN=0
+[[ "${1:-}" == "--no-login" ]] && NO_LOGIN=1
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 export HF_HOME=/workspace/.cache/huggingface
@@ -18,6 +24,8 @@ cd "$REPO"
 echo "== Hugging Face"
 if python3 -c "from huggingface_hub import whoami; print('logged in as', whoami()['name'])" 2>/dev/null; then
   :
+elif [[ $NO_LOGIN == 1 ]]; then
+  echo "not logged in (skipped: --no-login)"
 else
   echo "Paste a WRITE token from https://huggingface.co/settings/tokens"
   hf auth login 2>/dev/null || huggingface-cli login
@@ -27,6 +35,10 @@ fi
 echo "== Claude"
 command -v claude >/dev/null || { echo "Claude Code is not installed yet -- wait for /workspace/autorun.log to pass setup, then re-run." >&2; exit 1; }
 if ! claude auth status >/dev/null 2>&1; then
+  if [[ $NO_LOGIN == 1 ]]; then
+    echo "Claude not logged in: Remote Control not started (run this script without --no-login)"
+    exit 0
+  fi
   echo "Sign in with the Claude account (subscription) whose app should show this pod's session."
   claude auth login
 fi

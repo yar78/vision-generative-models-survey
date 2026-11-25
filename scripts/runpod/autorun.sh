@@ -64,6 +64,10 @@ if ! command -v claude >/dev/null && [[ ! -x /root/.local/bin/claude ]]; then
   curl -fsSL https://claude.ai/install.sh | bash || echo "Claude Code install failed" >&2
 fi
 grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+export PATH="$HOME/.local/bin:$PATH"
+# Claude Remote Control: start now if this pod's disk already holds a Claude login;
+# otherwise claude_remote.sh (the one manual step) logs in and starts it.
+bash scripts/runpod/claude_remote.sh --no-login || echo "Remote Control autostart failed" >&2
 
 # ---- wait for a Hugging Face login (private datasets, --push-to-hub) -------------------
 status waiting-for-hf-login

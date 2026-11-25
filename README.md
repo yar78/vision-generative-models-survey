@@ -109,6 +109,7 @@ scripts/
   push_to_hub.py     push an already-finished run directory
   runpod/setup.sh    one-time setup on a fresh pod
   runpod/train.sh    detached training + TensorBoard on a pod
+  runpod/pod.py      create / list / status / terminate pods (always with the cost guards)
   runpod/autorun.sh  unattended pod bootstrap (setup, Claude Code, jobs, cost guards)
   runpod/idle_killer.sh   terminate the pod after 30 idle minutes
   runpod/claude_remote.sh one-time logins + Claude Remote Control on the pod
@@ -164,6 +165,15 @@ bash scripts/runpod/train.sh configs/ray_dog/dreambooth_lora.yaml --push-to-hub 
 `train.sh` runs detached (closing the terminal does not stop it), writes to
 `/workspace/genmodels/outputs/<name>/`, and serves TensorBoard on port 6006 --
 expose HTTP port 6006 on the pod and open `https://<pod-id>-6006.proxy.runpod.net`.
+
+**From a Claude Code session:** the `run-pod` skill (`.claude/skills/run-pod/`) launches
+and watches pods with `scripts/runpod/pod.py`, which always applies the cost guards below:
+
+```bash
+python scripts/runpod/pod.py create --name ray-ddpm --configs configs/ray_dog_faces/ddpm.yaml
+python scripts/runpod/pod.py status <pod-id>
+python scripts/runpod/pod.py terminate <pod-id> --yes
+```
 
 **Fully unattended, with a Claude agent on the pod:** set the pod's start command to
 clone the repo and run `scripts/runpod/autorun.sh` (it sets up, installs Claude Code and

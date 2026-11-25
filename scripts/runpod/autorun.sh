@@ -27,6 +27,12 @@ STATUS=/workspace/AUTORUN_STATUS
 status() { echo "$1" > "$STATUS"; echo "$(date -Is) status: $1"; }
 export HF_HOME=/workspace/.cache/huggingface
 export GENMODELS_OUTPUT=/workspace/genmodels/outputs GENMODELS_DATA=/workspace/genmodels/data
+# A Runpod secret reference that was not substituted would be taken as the token itself and
+# would override any token stored by a manual login: drop it so the manual login works.
+if [[ "${HF_TOKEN:-}" == "{{"* ]]; then
+  echo "HF_TOKEN holds an unsubstituted Runpod secret reference -- ignoring it" >&2
+  unset HF_TOKEN
+fi
 
 # ---- cost guard ----------------------------------------------------------------------
 if [[ "${MAX_HOURS:-0}" != "0" ]]; then
@@ -72,7 +78,7 @@ bash scripts/runpod/claude_remote.sh --no-login || echo "Remote Control autostar
 # ---- wait for a Hugging Face login (private datasets, --push-to-hub) -------------------
 status waiting-for-hf-login
 until python3 -c "from huggingface_hub import whoami; whoami()" >/dev/null 2>&1; do sleep 20; done
-echo "$(date -Is) Hugging Face login found"
+echo "$(date -Is) Hugging Face login found ($([[ -n "${HF_TOKEN:-}" ]] && echo "HF_TOKEN from Runpod secret" || echo "stored login"))"
 
 # ---- one-off commands (e.g. evaluations) ------------------------------------------------
 if [[ -n "${AUTORUN_COMMANDS:-}" ]]; then

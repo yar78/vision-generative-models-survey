@@ -20,6 +20,12 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 export HF_HOME=/workspace/.cache/huggingface
 export PATH="$HOME/.local/bin:$PATH"
 cd "$REPO"
+# A Runpod secret reference that was not substituted would be taken as the token itself and
+# would override any token stored by a manual login: drop it so the manual login works.
+if [[ "${HF_TOKEN:-}" == "{{"* ]]; then
+  echo "HF_TOKEN holds an unsubstituted Runpod secret reference -- ignoring it" >&2
+  unset HF_TOKEN
+fi
 
 echo "== Hugging Face"
 if python3 -c "from huggingface_hub import whoami; print('logged in as', whoami()['name'])" 2>/dev/null; then

@@ -20,8 +20,10 @@ API call, console instructions): `pod.py create` is what guarantees the cost gua
 2. arms the **hard cap**: terminate `--max-hours` after boot (default 8).
 3. installs the repo (`scripts/runpod/setup.sh`) and Claude Code (login kept on `/workspace`).
 4. starts **Claude Remote Control** in tmux (`claude-rc`) if Claude is already logged in.
-5. waits for a Hugging Face login, runs `--commands` in order, then trains `--configs`
-   side by side with `--push-to-hub`. Status line: `/workspace/AUTORUN_STATUS`.
+5. logs in to Hugging Face from the Runpod secret `huggingface_token` if the account has
+   one (else waits for the manual login), runs `--commands` in order, then trains
+   `--configs` side by side with `--push-to-hub`. Status line: `/workspace/AUTORUN_STATUS`.
+   Hub details (tokens, uploads, updates, reading results): the **`hugging-face`** skill.
 
 ## Procedure
 
@@ -49,7 +51,8 @@ API call, console instructions): `pod.py create` is what guarantees the cost gua
 5. **Tell the user the one manual step** (pod.py prints it): in the Runpod console,
    Connect -> Start Web Terminal on the pod, then
    `bash /workspace/vision-generative-models-survey/scripts/runpod/claude_remote.sh`.
-   It logs in to Hugging Face (jobs wait for this) and Claude, and starts Remote Control:
+   It logs in to Claude -- and to Hugging Face if the pod has no `huggingface_token` secret
+   (jobs wait for that login; pod.py says which case applies) -- and starts Remote Control:
    the session `runpod-genmodels` appears in claude.ai/code and the Claude app. Logins
    only the account owner can do; do not try to automate them. **The idle guard counts
    from boot**: if nobody logs in within the idle window, the pod terminates itself.

@@ -16,7 +16,10 @@ Every pod created here boots into scripts/runpod/autorun.sh, which:
 * arms the **hard cap**: terminate --max-hours after boot (default 8);
 * installs the repo and Claude Code, waits for a Hugging Face login, runs --commands
   one after another, then trains --configs side by side (each pushed to the Hub);
-* starts **Claude Remote Control** in tmux as soon as Claude is logged in on the pod.
+* starts **Claude Remote Control** in tmux as soon as Claude is logged in on the pod;
+* logs in to **Hugging Face by itself** if the Runpod account has a secret named
+  ``huggingface_token`` (Runpod console -> Settings -> Secrets; value: a Hugging Face
+  write token), passed to the pod as ``HF_TOKEN={{ RUNPOD_SECRET_huggingface_token }}``.
 
 The one manual step -- logins that only the account owner can do -- is printed after
 `create`: in the pod's web terminal, run scripts/runpod/claude_remote.sh.
@@ -50,6 +53,7 @@ DEFAULT_GPUS = [
     ("SECURE", "NVIDIA GeForce RTX 4090"),
 ]
 MIN_IDLE_MINUTES = 10
+HF_SECRET = "huggingface_token"  # Runpod secret holding a Hugging Face write token
 
 
 def gql(query: str, variables: dict | None = None) -> dict:
@@ -158,13 +162,18 @@ def cmd_create(args):
         "dockerArgs": f"bash -c '{boot}'",
         "env": [{"key": k, "value": v} for k, v in env.items() if v],
     }
+    # Hugging Face login: from a Runpod secret if the account has one (only names are readable).
+    secrets = {s["name"] for s in gql("{ myself { secrets { name } } }")["data"]["myself"]["secrets"] or []}
+    hf_auto = args.hf_secret in secrets
+    if hf_auto:
+        base["env"].append({"key": "HF_TOKEN", "value": "{{ RUNPOD_SECRET_%s }}" % args.hf_secret})
     gpus = DEFAULT_GPUS
     if args.gpu:
         gpus = [(c, g) for c, g in DEFAULT_GPUS if any(s.lower() in g.lower() for s in args.gpu)]
     if args.community_only:
         gpus = [(c, g) for c, g in gpus if c == "COMMUNITY"]
     if args.dry_run:
-        print(json.dumps({"gpu_candidates": gpus, "input": base}, indent=2))
+        print(json.dumps({"gpu_candidates": gpus, "hf_login_from_secret": hf_auto, "input": base}, indent=2))
         return
 
     q = """mutation($input: PodFindAndDeployOnDemandInput) { podFindAndDeployOnDemand(input: $input) {
@@ -191,13 +200,20 @@ def cmd_create(args):
             print("  container is up")
             break
         time.sleep(15)
+    if hf_auto:
+        hf_line = (f"  Hugging Face: automatic (Runpod secret '{args.hf_secret}'); jobs start without waiting.")
+    else:
+        hf_line = (f"  Hugging Face: manual -- jobs wait until you log in below. To make it automatic next time,\n"
+                   f"  create a Runpod secret named '{args.hf_secret}' (console -> Settings -> Secrets) holding\n"
+                   f"  a Hugging Face WRITE token.")
     print(f"""
-ONE MANUAL STEP (logins only the account owner can do; jobs wait for the Hugging Face one,
-and the idle guard terminates the pod if nothing happens for {args.idle_minutes} min):
+{hf_line}
+ONE MANUAL STEP (only the account owner can log in to Claude; the idle guard terminates
+the pod if nothing happens for {args.idle_minutes} min):
   Runpod console -> Pods -> {args.name} -> Connect -> Start Web Terminal, then run
     bash /workspace/vision-generative-models-survey/scripts/runpod/claude_remote.sh
-  It logs in to Hugging Face and Claude and starts Claude Remote Control: the pod then shows
-  up as session "runpod-genmodels" in claude.ai/code and the Claude app.""")
+  It logs in to Claude (and Hugging Face, if not done) and starts Claude Remote Control: the
+  pod then shows up as session "runpod-genmodels" in claude.ai/code and the Claude app.""")
 
 
 def main():
@@ -217,6 +233,7 @@ def main():
     c.add_argument("--gpu", nargs="*", help="restrict to GPU names containing these strings, e.g. 4090 3090")
     c.add_argument("--community-only", action="store_true", help="never fall back to the pricier Secure Cloud")
     c.add_argument("--disk-gb", type=int, default=30)
+    c.add_argument("--hf-secret", default=HF_SECRET, help="Runpod secret with a Hugging Face token, used if it exists")
     c.add_argument("--branch", help="git branch the pod checks out (default: the current one)")
     c.add_argument("--dry-run", action="store_true", help="print the request, create nothing")
     c.set_defaults(func=cmd_create)

@@ -109,6 +109,9 @@ scripts/
   push_to_hub.py     push an already-finished run directory
   runpod/setup.sh    one-time setup on a fresh pod
   runpod/train.sh    detached training + TensorBoard on a pod
+  runpod/autorun.sh  unattended pod bootstrap (setup, Claude Code, jobs, cost guards)
+  runpod/idle_killer.sh   terminate the pod after 30 idle minutes
+  runpod/claude_remote.sh one-time logins + Claude Remote Control on the pod
   data/make_face_dataset.py  build + upload the aligned dog-face dataset
 tests/
   test_smoke.py           every from-scratch config: train -> checkpoint -> export -> reload -> resume
@@ -164,7 +167,10 @@ expose HTTP port 6006 on the pod and open `https://<pod-id>-6006.proxy.runpod.ne
 
 **Fully unattended, with a Claude agent on the pod:** set the pod's start command to
 clone the repo and run `scripts/runpod/autorun.sh` (it sets up, installs Claude Code and
-trains `AUTORUN_CONFIGS` side by side, with a `MAX_HOURS` self-terminate cost guard).
+trains `AUTORUN_CONFIGS` side by side). Two cost guards terminate the pod by themselves:
+**idle for 30 minutes** (`IDLE_MINUTES`: no GPU use, no job or download running and no
+conversation with the pod's Claude agent; pause with `touch /workspace/.no-idle-kill`),
+and a hard cap of `MAX_HOURS` after boot.
 Then, once, in the pod's web terminal:
 
 ```bash

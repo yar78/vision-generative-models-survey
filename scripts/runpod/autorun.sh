@@ -11,8 +11,11 @@
 #   AUTORUN_COMMANDS optional shell commands, separated by ';;', run one after another in the
 #                    repo (after the Hugging Face login, before training), output appended
 #                    to /workspace/autorun.log -- e.g. an evaluation script
-#   MAX_HOURS        cost guard: the pod terminates itself this long after boot, whatever
+#   MAX_HOURS        hard cost cap: the pod terminates itself this long after boot, whatever
 #                    it is doing (0 = never). Outputs are pushed to the Hub as runs finish.
+#   IDLE_MINUTES     the pod terminates itself after this long idle (default 30; 0 = off):
+#                    no GPU use, no job or download running, no Claude agent activity.
+#                    See scripts/runpod/idle_killer.sh; pause with: touch /workspace/.no-idle-kill
 #
 # Progress: /workspace/autorun.log, each run's train.log, TensorBoard on port 6006,
 # and /workspace/AUTORUN_STATUS (one line: waiting-for-hf-login / training / done).
@@ -37,6 +40,13 @@ if [[ "${MAX_HOURS:-0}" != "0" ]]; then
     fi
   ) &
   echo "$(date -Is) cost guard armed: terminate after ${MAX_HOURS} h"
+fi
+
+# ---- idle guard --------------------------------------------------------------------------
+# Armed at boot: waiting too long for the logins also counts as idle.
+if [[ "${IDLE_MINUTES:-30}" != "0" ]]; then
+  IDLE_MINUTES="${IDLE_MINUTES:-30}" nohup bash scripts/runpod/idle_killer.sh >> /workspace/idle_killer.log 2>&1 &
+  echo "$(date -Is) idle guard armed: terminate after ${IDLE_MINUTES:-30} idle minutes (log: /workspace/idle_killer.log)"
 fi
 
 # ---- setup -----------------------------------------------------------------------------
